@@ -48,6 +48,12 @@ class AppBase(object):
         self.raw_input = sys.stdin.read()
 
         # TODO: catch exceptions parsing JSON
+        try:
+            self.experiment = Box.from_json(self.raw_input)
+        except Exception as ex:
+            self.eprint(f"Failed to parse experiment JSON: {ex}")
+            sys.exit(1)
+
         self.experiment = Box.from_json(self.raw_input)
         self.exp_name   = self.extract_experiment_name()
         self.exp_dir    = self.extract_experiment_dir()
