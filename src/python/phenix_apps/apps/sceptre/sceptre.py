@@ -630,16 +630,14 @@ class Sceptre(AppBase):
         self.render("sceptre-startup.mako", startup_file)
         os.chmod(startup_file, 0o777)
 
-        fd_configs = []
+        ######################## Provider pre-start ###################################
+        providers = self.extract_nodes_type("provider")
+        provider_map = {}
+        objects_file_path = None
+
         # Add hil tags that are listed in the provider metadata
         # Note: This is taken from the hil_tags found in a providers metadata in the scenario file
         hil_object_list = []
-
-
-        ######################## Provider pre-start ###################################
-        providers    = self.extract_nodes_type("provider")
-        provider_map = {}
-        objects_file_path = None
 
         for provider in providers:
             if "metadata" not in provider:
@@ -743,8 +741,7 @@ class Sceptre(AppBase):
         power_object_list = []
         reg_config = {}
 
-        # Write injections for fd-server
-        # type: fd-server
+        # Write injections for 'fd-server'
         fds = self.extract_nodes_type("fd-server")
         fd_counter = 0
 
@@ -832,7 +829,6 @@ class Sceptre(AppBase):
                 counter=fd_counter,
             )
 
-            fd_configs.append(fd_config)
             fd_server_configs[fd_.hostname] = fd_config
 
             # Write fd server config file injection
@@ -869,7 +865,7 @@ class Sceptre(AppBase):
                 device=fd_,
                 kwargs={
                     "name": sceptre_type,
-                    # type: ignition
+                    # 'type: ignition'
                     "needrestart": True if self.extract_nodes_type("ignition") else False,
                 }
             )
@@ -1018,8 +1014,8 @@ class Sceptre(AppBase):
             # Generate config file
             self.render("helics_config.mako", f"{vm_dir}/helics.json", config=config)
 
-        # Write fd client file injections
-        # type: fd-client
+        # Write file injections for 'fd-client'
+        # 'type: fd-client'
         fd_clients = self.extract_nodes_type("fd-client")
 
         for fd_ in fd_clients:
@@ -1062,8 +1058,8 @@ class Sceptre(AppBase):
             # Write fd client startup script injections
             self.render_sceptre_start(fd_, {"name": "field-device"})
 
-        # Write fep file injections
-        # type: fep
+        # Write file injections for 'fep' nodes
+        # 'type: fep'
         feps = self.extract_nodes_type("fep")
         fep_counter = 0
 
