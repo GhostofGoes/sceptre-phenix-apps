@@ -1,4 +1,7 @@
-import copy, os, re, sys
+import copy
+import os
+import re
+import sys
 
 from box import Box
 
@@ -47,18 +50,17 @@ class AppBase(object):
         # Keep this around just in case apps want direct access to it.
         self.raw_input = sys.stdin.read()
 
-        # TODO: catch exceptions parsing JSON
         try:
             self.experiment = Box.from_json(self.raw_input)
         except Exception as ex:
             self.eprint(f"Failed to parse experiment JSON: {ex}")
             sys.exit(1)
 
-        self.experiment = Box.from_json(self.raw_input)
-        self.exp_name   = self.extract_experiment_name()
-        self.exp_dir    = self.extract_experiment_dir()
-        self.asset_dir  = self.extract_asset_dir()
-        self.metadata   = self.extract_metadata()
+        self.exp_name   = self.experiment.spec.experimentName
+        self.exp_dir    = self.experiment.spec.baseDir
+        self.app        = self.extract_app()
+        self.asset_dir  = self.app.get('assetDir', None)
+        self.metadata   = self.app.get('metadata', {})
         self.topo       = self.get_annotation('topology')
 
         os.makedirs(self.exp_dir, exist_ok=True)
@@ -255,26 +257,8 @@ class AppBase(object):
     def extract_labeled_nodes(self, labels):
         return self.extract_nodes_label(labels)
 
-    def extract_experiment_name(self):
-        return self.experiment.spec.experimentName
-
-    def extract_experiment_dir(self):
-        return self.experiment.spec.baseDir
-
-    def extract_asset_dir(self):
-        app = self.extract_app()
-
-        return app.get('assetDir', None)
-
-    def extract_metadata(self):
-        app = self.extract_app()
-
-        return app.get('metadata', {})
-
     def extract_node_metadata(self, hostname):
-        app = self.extract_app()
-
-        for host in app.get("hosts", []):
+        for host in self.app.get("hosts", []):
             if host.hostname == hostname:
                 return host.metadata
 
