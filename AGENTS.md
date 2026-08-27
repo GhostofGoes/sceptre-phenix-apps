@@ -106,6 +106,9 @@ The SCEPTRE app includes configuration tables, SunSpec XML models, and the
 MyDesigner template tree. SCORCH also contains scripts and binary payloads.
 Treat these as runtime package data:
 
+- Do not modify anything under
+  `src/python/phenix_apps/apps/sceptre/protocols/sunspec/`; leave the entire
+  directory as-is.
 - Do not reformat, regenerate, or replace bundled third-party and binary assets
   unless the task explicitly targets them.
 - When adding runtime files, update `[tool.setuptools.package-data]` in
