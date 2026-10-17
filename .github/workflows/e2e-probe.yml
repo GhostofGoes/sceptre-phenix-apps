@@ -1,0 +1,216 @@
+# Experimental: runs a phenix user app from this repository end to end
+# against a real phenix and a real minimega on a GitHub-hosted runner.
+# The VMs are minimega "stub" VMs (an unmerged minimega spike carried as a
+# patch in the phenix fork), so no hypervisor is needed; the app under test,
+# mgmt_tap, only talks to minimega (host taps on the experiment bridge).
+name: E2E Probe
+
+on:
+  push:
+    branches: ['claude/serene-fermi-38ybhr']
+    paths:
+      - '.github/workflows/e2e-probe.yml'
+      - 'src/python/phenix_apps/apps/mgmt_tap/**'
+      - 'src/python/phenix_apps/common/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.24'
+  PHENIX_REPOSITORY: GhostofGoes/sceptre-phenix
+  PHENIX_REF: claude/serene-fermi-38ybhr
+
+jobs:
+  mgmt-tap-e2e:
+    name: mgmt_tap app through phenix and minimega (stub VMs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out phenix
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.PHENIX_REPOSITORY }}
+          ref: ${{ env.PHENIX_REF }}
+          path: phenix
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: phenix/src/go/go.sum
+
+      - name: Build phenix (CLI/API only, no web UI bundle)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler
+          make -C phenix/src/go generate
+          make -C phenix/src/go phenix
+          phenix/src/go/bin/phenix version
+
+      # Reuses the composite action from the phenix fork: one definition of
+      # "a runner with minimega on it" shared by every repository.
+      - name: Build and start minimega with the stub VM type
+        id: mm
+        uses: GhostofGoes/sceptre-phenix/.github/actions/minimega@claude/serene-fermi-38ybhr
+        with:
+          repository: sandia-minimega/minimega
+          ref: 66ed1aacc8107f00cb003a512e835d6f32886dda
+          patch: phenix/.github/e2e/minimega-stub-vm.patch
+          filepath: /phenix/images
+
+      - name: Install the minimega Python module and phenix-apps system-wide
+        env:
+          MM_BIN: ${{ steps.mm.outputs.bin }}
+        run: |
+          set -euo pipefail
+          # phenix runs as root and execs `phenix-app-<name>` from sudo's secure
+          # PATH, so install both packages into the system Python as root.
+          cd minimega
+          export GOFLAGS=-mod=vendor GOBIN="$MM_BIN"
+          go install ./cmd/pyapigen
+          "$MM_BIN/pyapigen" -out lib/minimega.py "$MM_BIN/minimega"
+          cp README.md VERSION lib/
+          sudo python3 -m pip install --break-system-packages --quiet ./lib
+          cd "$GITHUB_WORKSPACE"
+          sudo python3 -m pip install --break-system-packages --quiet ./src/python
+          sudo python3 -c 'import minimega, phenix_apps; print("minimega module", minimega.__file__)'
+          sudo which phenix-app-mgmt_tap
+
+      - name: Prepare disk image, topology, and scenario
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /phenix/images
+          mkdir -p /tmp/e2e
+          sudo qemu-img create -f qcow2 /phenix/images/blank.qc2 32M
+          cat > /tmp/e2e/topology.yaml <<'YAML'
+          apiVersion: phenix.sandia.gov/v1
+          kind: Topology
+          metadata:
+            name: e2e-stub
+          spec:
+            nodes:
+            - type: VirtualMachine
+              annotations:
+                phenix/default-apps: false
+              general:
+                hostname: stub1
+                vm_type: stub
+              hardware:
+                vcpus: 1
+                memory: 64
+                os_type: linux
+                drives:
+                - image: blank.qc2
+              network:
+                interfaces:
+                - name: if0
+                  type: ethernet
+                  proto: static
+                  address: 10.0.0.11
+                  mask: 24
+                  vlan: MGMT
+            - type: VirtualMachine
+              annotations:
+                phenix/default-apps: false
+              general:
+                hostname: stub2
+                vm_type: stub
+              hardware:
+                vcpus: 1
+                memory: 64
+                os_type: linux
+                drives:
+                - image: blank.qc2
+              network:
+                interfaces:
+                - name: if0
+                  type: ethernet
+                  proto: static
+                  address: 10.0.0.12
+                  mask: 24
+                  vlan: MGMT
+          YAML
+          cat > /tmp/e2e/scenario.yaml <<'YAML'
+          apiVersion: phenix.sandia.gov/v1
+          kind: Scenario
+          metadata:
+            name: e2e-mgmt-tap
+            annotations:
+              topology: e2e-stub
+          spec:
+            apps:
+            - name: mgmt_tap
+              metadata:
+                subnet: 10.0.0.0/24
+                vlan: MGMT
+                bridge: phenix
+          YAML
+
+      - name: Run the mgmt_tap app through an experiment lifecycle
+        env:
+          MM_BIN: ${{ steps.mm.outputs.bin }}
+        run: |
+          set -euo pipefail
+          PHENIX="sudo $PWD/phenix/src/go/bin/phenix --deploy-mode all"
+          mm() { sudo "$MM_BIN/minimega" -base /tmp/minimega -e "$@"; }
+          row() { printf '| %s | %s |\n' "$1" "$(echo "$2" | tr '\n' ' ' | cut -c1-300)" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          { echo "## mgmt_tap app end to end"; echo; echo "| Step | Result |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+
+          $PHENIX config create /tmp/e2e/topology.yaml /tmp/e2e/scenario.yaml
+          echo "::group::phenix experiment apps"; $PHENIX experiment apps; echo "::endgroup::"
+          row "user app discovered" "$($PHENIX experiment apps | grep -c mgmt_tap || true)"
+
+          $PHENIX experiment create e2e-apps -t e2e-stub -s e2e-mgmt-tap
+          row "experiment create" "ok"
+          start=$(date +%s)
+          $PHENIX experiment start e2e-apps 2>&1 | tee /tmp/e2e/start.log
+          row "experiment start" "ok in $(( $(date +%s) - start ))s"
+          row "app log lines" "$(grep -c "mgmt_tap" /tmp/e2e/start.log || true)"
+
+          # mgmt_tap names the tap <exp[:9]>_<exp[:4]> and addresses it from the subnet
+          tap="e2e-apps_e2e-"
+          row "vm info" "$(mm 'namespace e2e-apps .columns name,state,type,vlan vm info')"
+          row "ports on bridge phenix" "$(sudo ovs-vsctl list-ports phenix | tr '\n' ' ')"
+          row "host tap created by app (expect $tap with 10.0.0.1/24)" "$(ip -4 -o addr show "$tap" 2>&1)"
+          row "minimega taps" "$(mm 'namespace e2e-apps taps')"
+          created=$(ip -4 -o addr show "$tap" 2>/dev/null | grep -c '10.0.0.1/24' || true)
+
+          $PHENIX experiment stop e2e-apps 2>&1 | tee /tmp/e2e/stop.log
+          row "experiment stop" "ok"
+          row "host tap after stop (expect gone)" "$(ip -o link show "$tap" 2>&1 | head -1)"
+          deleted=$(ip -o link show "$tap" >/dev/null 2>&1 && echo 0 || echo 1)
+          $PHENIX experiment delete e2e-apps
+          row "experiment delete" "ok"
+          echo "::group::phenix-apps log"; sudo tail -40 /var/log/phenix/phenix-apps.log 2>/dev/null || true; echo "::endgroup::"
+          [ "$created" -eq 1 ] || { echo "::error::mgmt_tap did not create the host tap"; exit 1; }
+          [ "$deleted" -eq 1 ] || { echo "::error::mgmt_tap did not delete the host tap on cleanup"; exit 1; }
+
+      - name: Collect logs
+        if: always()
+        run: |
+          sudo cp /tmp/minimega/minimega.log /tmp/minimega-daemon.log 2>/dev/null || true
+          sudo cp /var/log/phenix/phenix-apps.log /tmp/phenix-apps.log 2>/dev/null || true
+          sudo chmod a+r /tmp/minimega-daemon.log /tmp/phenix-apps.log 2>/dev/null || true
+          echo "::group::minimega log tail"; tail -60 /tmp/minimega-daemon.log || true; echo "::endgroup::"
+          echo "::group::phenix-apps log tail"; tail -60 /tmp/phenix-apps.log || true; echo "::endgroup::"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mgmt-tap-e2e-probe
+          path: |
+            /tmp/minimega-daemon.log
+            /tmp/phenix-apps.log
+            /tmp/e2e/*.yaml
+            /tmp/e2e/*.log
+          if-no-files-found: ignore
