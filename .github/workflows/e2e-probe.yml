@@ -80,11 +80,19 @@ jobs:
           go install ./cmd/pyapigen
           "$MM_BIN/pyapigen" -out lib/minimega.py "$MM_BIN/minimega"
           cp README.md VERSION lib/
-          sudo python3 -m pip install --break-system-packages --quiet ./lib
           cd "$GITHUB_WORKSPACE"
-          sudo python3 -m pip install --break-system-packages --quiet ./src/python
-          sudo python3 -c 'import minimega, phenix_apps; print("minimega module", minimega.__file__)'
+          # A root-owned virtualenv: installing into the Debian system Python
+          # fails on debian-packaged dependencies (typing_extensions). The
+          # console scripts are linked into sudo's secure PATH so that phenix,
+          # running as root, can exec `phenix-app-<name>`.
+          sudo python3 -m venv /opt/phenix-apps
+          sudo /opt/phenix-apps/bin/pip install --quiet ./minimega/lib ./src/python
+          sudo /opt/phenix-apps/bin/python -c 'import minimega, phenix_apps; print("minimega module", minimega.__file__)'
+          for s in /opt/phenix-apps/bin/phenix-app-* /opt/phenix-apps/bin/phenix-scorch-* /opt/phenix-apps/bin/phenix-scheduler-*; do
+            [ -e "$s" ] && sudo ln -sf "$s" /usr/local/bin/
+          done
           sudo which phenix-app-mgmt_tap
+          sudo phenix-app-mgmt_tap --help >/dev/null 2>&1 || true
 
       - name: Prepare disk image, topology, and scenario
         run: |
@@ -161,7 +169,7 @@ jobs:
           MM_BIN: ${{ steps.mm.outputs.bin }}
         run: |
           set -euo pipefail
-          PHENIX="sudo $PWD/phenix/src/go/bin/phenix --deploy-mode all"
+          PHENIX="sudo $PWD/phenix/src/go/bin/phenix --deploy-mode all --store.endpoint bolt:///etc/phenix/store.bdb"
           mm() { sudo "$MM_BIN/minimega" -base /tmp/minimega -e "$@"; }
           row() { printf '| %s | %s |\n' "$1" "$(echo "$2" | tr '\n' ' ' | cut -c1-300)" | tee -a "$GITHUB_STEP_SUMMARY"; }
           { echo "## mgmt_tap app end to end"; echo; echo "| Step | Result |"; echo "|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
