@@ -97,6 +97,16 @@ jobs:
           done
           sudo which phenix-app-mgmt_tap
           sudo phenix-app-mgmt_tap --help >/dev/null 2>&1 || true
+          # phenix lists user apps with `find <every PATH dir> -type f -executable
+          # -name 'phenix-app-*'` and discards the whole result when find exits
+          # nonzero, which it does as soon as one PATH entry (sudo's secure_path
+          # includes /snap/bin) does not exist. Show the state, then create the
+          # missing directories so discovery works on this runner.
+          sudo bash -c 'IFS=: read -ra dirs <<<"$PATH"; echo "sudo PATH=$PATH"
+            for d in "${dirs[@]}"; do [ -d "$d" ] || echo "::warning::PATH entry missing under sudo: $d"; done
+            find "${dirs[@]}" -type f -executable -name "phenix-app-*"; echo "find exit status: $?"
+            for d in "${dirs[@]}"; do mkdir -p "$d"; done
+            find "${dirs[@]}" -type f -executable -name "phenix-app-*" >/dev/null; echo "find exit status after mkdir: $?"'
 
       - name: Prepare disk image, topology, and scenario
         run: |
