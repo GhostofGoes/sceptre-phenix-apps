@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           # phenix runs as root and execs `phenix-app-<name>` from sudo's secure
-          # PATH, so install both packages into the system Python as root.
+          # PATH, so both packages are installed where root can run them.
           cd minimega
           export GOFLAGS=-mod=vendor GOBIN="$MM_BIN"
           go install ./cmd/pyapigen
