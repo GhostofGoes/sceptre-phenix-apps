@@ -83,13 +83,17 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           # A root-owned virtualenv: installing into the Debian system Python
           # fails on debian-packaged dependencies (typing_extensions). The
-          # console scripts are linked into sudo's secure PATH so that phenix,
-          # running as root, can exec `phenix-app-<name>`.
+          # console scripts are exposed on sudo's secure PATH so that phenix,
+          # running as root, can exec `phenix-app-<name>`. phenix discovers
+          # user apps with `find -type f`, which skips symlinks, so install
+          # regular wrapper scripts rather than links.
           sudo python3 -m venv /opt/phenix-apps
           sudo /opt/phenix-apps/bin/pip install --quiet ./minimega/lib ./src/python
           sudo /opt/phenix-apps/bin/python -c 'import minimega, phenix_apps; print("minimega module", minimega.__file__)'
           for s in /opt/phenix-apps/bin/phenix-app-* /opt/phenix-apps/bin/phenix-scorch-* /opt/phenix-apps/bin/phenix-scheduler-*; do
-            [ -e "$s" ] && sudo ln -sf "$s" /usr/local/bin/
+            [ -e "$s" ] || continue
+            printf '#!/bin/sh\nexec %s "$@"\n' "$s" | sudo tee "/usr/local/bin/$(basename "$s")" >/dev/null
+            sudo chmod 0755 "/usr/local/bin/$(basename "$s")"
           done
           sudo which phenix-app-mgmt_tap
           sudo phenix-app-mgmt_tap --help >/dev/null 2>&1 || true
@@ -149,7 +153,7 @@ jobs:
                   vlan: MGMT
           YAML
           cat > /tmp/e2e/scenario.yaml <<'YAML'
-          apiVersion: phenix.sandia.gov/v1
+          apiVersion: phenix.sandia.gov/v2
           kind: Scenario
           metadata:
             name: e2e-mgmt-tap
@@ -179,7 +183,9 @@ jobs:
 
           $PHENIX config create /tmp/e2e/topology.yaml /tmp/e2e/scenario.yaml
           echo "::group::phenix experiment apps"; $PHENIX experiment apps; echo "::endgroup::"
-          row "user app discovered" "$($PHENIX experiment apps | grep -c mgmt_tap || true)"
+          discovered=$($PHENIX experiment apps | grep -c mgmt_tap || true)
+          row "user app discovered" "$discovered"
+          [ "$discovered" -ge 1 ] || { echo "::error::phenix did not discover phenix-app-mgmt_tap on PATH"; exit 1; }
 
           $PHENIX experiment create e2e-apps -t e2e-stub -s e2e-mgmt-tap
           row "experiment create" "ok"
