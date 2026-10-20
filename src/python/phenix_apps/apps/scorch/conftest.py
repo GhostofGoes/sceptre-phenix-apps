@@ -5,9 +5,11 @@ with the experiment JSON on stdin; `ComponentBase.__init__` reads all of it, so
 these fixtures set argv, stdin and the files directory before construction.
 """
 
+import contextlib
 import functools
 import io
 import json
+import os
 import signal
 import sys
 from unittest import mock
@@ -95,6 +97,35 @@ def component_args(monkeypatch, tmp_path):
     signal.signal(signal.SIGTERM, sigterm)
     logger.remove()
     logger.add(lambda msg: sys.stderr.write(msg))
+
+
+@pytest.fixture
+def fake_tshark(monkeypatch, tmp_path):
+    """Put a ``tshark`` on PATH that prints its arguments, one per line.
+
+    Runs in ``tmp_path``, so a test can check that no shell expanded anything.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tshark = bin_dir / "tshark"
+    tshark.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    tshark.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def log_messages():
+    """Messages logged through loguru until a component's execute_stage runs.
+
+    execute_stage removes every loguru handler, this one included.
+    """
+    messages = []
+    handler = logger.add(lambda msg: messages.append(msg.record["message"]))
+    yield messages
+    with contextlib.suppress(ValueError):
+        logger.remove(handler)
 
 
 class CCNamespace:

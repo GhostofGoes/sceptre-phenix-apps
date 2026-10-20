@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **OT-sim App**: DNP3 address assignment is a module function (`protocols.dnp3.assign_addresses`)
 - **Build System**: `Mako>=1.3.10`, `requests>=2.32.4` (security advisories).
+- **Build System**: Require `minimega>=3.3.0` for per-interface capture stops.
+- **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
 - **SCEPTRE App**: Register numbering state is per `FieldDeviceConfig` instead of class-level mutable state on `Register`; numbering is no longer order-dependent across configs and the test suite runs safely in parallel. Output is unchanged.
 - **SCEPTRE App**: `configure()` and `pre_start()` are stage classes, `ConfigureStage` and `PreStart`, sharing pre-start state through `PreStartState`.
 - **SCEPTRE App**: The device-type table is `configs/infrastructures.yaml`; adding a device type needs no code change.
@@ -52,16 +54,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: A `power-transmission` inverter raised `TypeError`, passing `infrastructure` twice into `Device()`.
 - **SCEPTRE App**: A `fep` without a mgmt interface raised `UnboundLocalError`, or reused the previous fep's endpoints.
 - **SCEPTRE App**: A historian on a subnet with no OPC server was configured with an unrelated OPC's tag list and no address to collect from. It now gets no tags and a warning naming the subnet.
+- **SCORCH collector**: Tolerate a null `loop`.
+- **SCORCH collector**: Collect per type from its own loop's components.
+- **SCORCH collector**: Read Linux miniccc logs from `/var/log/miniccc.log`, then `/miniccc.log`.
+- **SCORCH collector**: Accept components that omit `type`.
+- **SCORCH pcap**: Stop only its own captures; needs minimega 3.3.0.
+- **SCORCH pcap**: Set or clear the filter before capturing.
+- **SCORCH mm**: Quote multi-word filters; reset filter and `snaplen` afterwards.
+- **SCORCH erspan**: Fail configure at the first failing `ovs-vsctl` command.
+- **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
+- **SCORCH tcpdump**: Clear the cc filter after start and stop.
+- **SCORCH snort**: Collect and delete every `snort.log.<time>` packet log.
 - **SCORCH**: `mm_kill_process`, `mm_delete_file` and `ComponentBase` checks clear cc filters.
+- **SCORCH snort**: Clear the cc filter after each stage's commands.
 - **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
+- **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
+- **SCORCH mm**: `stop_capture` stops only the named VM interface.
+- **SCORCH pcap**: Reset `snaplen` after starting captures.
+- **SCORCH pcap**: Stop every capture before reporting a failed one.
+- **Common**: Escape backslashes and quotes in capture filters.
 - **Common**: Windows file deletes no longer hang multi-host namespaces.
+- **SCORCH snort**: Wait for Snort to exit before copying logs.
 - **SCORCH**: Canceled foreground stages run `finally` blocks on fresh connections.
 - **SCORCH pcap**: Find a `disruption` component that omits its `type`.
+- **SCORCH erspan**: Clean up its mirror by output port.
+- **SCORCH mm**: Convert captures only once minimega stops writing them.
 
 ### Security
 - **Common**: New `validate_hostname()` (phenix v2026.10.02 rules) and `safe_join()` guard hostnames and paths built from metadata; `mm_send()`/`mm_recv()` stay inside the miniccc mount. **Breaking:** rejects `_`, 1-char, all-digit, `all` and `phenix` hostnames.
 - **Apps**: Scale, wind turbine and Ignition names are restricted; protonuke and wireguard reject embedded newlines; wireguard configs are `0600`, sceptre startup scripts `0755`.
 - **SCORCH**: `cc`, `ssh` and `providerdata` transfers stay inside the run directory.
+- **SCORCH mm/tcpdump**: Run tshark without a shell for capture names.
+- **SCORCH pcap/collector**: Run Wireshark tools and phenix without a shell.
 
 ## [2.0.0] - 2026-03-04
 

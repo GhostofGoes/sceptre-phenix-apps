@@ -16,6 +16,24 @@ from .csv_gen import gen_csv
 # TODO: configuration option to specify what components to collect from explicitly
 # TODO: add check to ensure collector is run after all other components it's collecting from in the stop stage
 
+# phenix-built images log miniccc to /var/log/miniccc.log; /miniccc.log is the
+# fallback for images built otherwise.
+LINUX_MINICCC_LOGS = ("/var/log/miniccc.log", "/miniccc.log")
+
+# The component types the stop stage collects from.
+COLLECTED_TYPES = frozenset(
+    (
+        "disruption",
+        "hoststats",
+        "iperf",
+        "pcap",
+        "providerdata",
+        "qos",
+        "rtds",
+        "vmstats",
+    )
+)
+
 
 class Collector(ComponentBase):
     def __init__(self):
@@ -27,27 +45,40 @@ class Collector(ComponentBase):
         # meta_dir: "metadata" sub-directory in results directory
         self.meta_dir = Path(self.results_dir, "metadata")
 
-        # Determine what scorch components are enabled, and enable lookups
-        # by component type (for cases when name and type differ).
-        self.all_components = {
-            c.type: c for c in self.extract_app("scorch").metadata.components
-        }
-        self.run_config = self.extract_app("scorch").metadata.runs[self.run]
+        # Determine what scorch components the collector's loop uses, and
+        # enable lookups by component type (for cases when name and type
+        # differ). A scenario may define several components of one type for
+        # different runs or loops. phenix names a component's output directory
+        # by its loop depth and count only, and passes a component no outer
+        # loop's count, so the collector can read only what its own loop ran.
+        scorch = self.extract_app("scorch").metadata
+        self.run_config = scorch.runs[self.run]
         self.enabled_components = {}
 
-        # TODO: this doesn't handle multiple instances of same component with different name
-        # However, for the components being collected, there should only be one instance usually.
-        for comp in self.all_components.values():
-            if any(
-                comp.name in run_stage
-                for run_stage in self.run_config.values()
-                if isinstance(run_stage, list)
-            ) or any(
-                comp.name in loop_stage
-                for loop_stage in self.run_config.get("loop", {}).values()
-                if isinstance(loop_stage, list)
-            ):
-                self.enabled_components[comp.type] = comp
+        used = _loop_component_names(self.run_config, self.loop)
+        elsewhere = _used_component_names(self.run_config) - used
+
+        for comp in scorch.components:
+            # phenix core defaults an omitted or empty type to the name
+            ctype = comp.get("type") or comp.name
+
+            if comp.name in elsewhere and ctype in COLLECTED_TYPES:
+                logger.warning(
+                    f"not collecting from '{comp.name}': it does not run in loop "
+                    f"{self.loop} of run {self.run}, where collector "
+                    f"'{self.name}' runs"
+                )
+
+            if comp.name not in used:
+                continue
+
+            kept = self.enabled_components.setdefault(ctype, comp)
+            if kept is not comp:
+                logger.warning(
+                    f"loop {self.loop} of run {self.run} uses more than one "
+                    f"'{ctype}' component; collecting from '{kept.name}' and "
+                    f"ignoring '{comp.name}'"
+                )
 
         self.execute_stage()
 
@@ -63,9 +94,15 @@ class Collector(ComponentBase):
         sceptre_topo = self.experiment.metadata.annotations.topology
         sceptre_scenario = self.experiment.metadata.annotations.scenario
 
-        topo_data = utils.run_command(f"phenix config get topology/{sceptre_topo}")
-        sc_data = utils.run_command(f"phenix config get scenario/{sceptre_scenario}")
-        exp_data = utils.run_command(f"phenix config get experiment/{self.exp_name}")
+        topo_data = utils.run_command(
+            ["phenix", "config", "get", f"topology/{sceptre_topo}"]
+        )
+        sc_data = utils.run_command(
+            ["phenix", "config", "get", f"scenario/{sceptre_scenario}"]
+        )
+        exp_data = utils.run_command(
+            ["phenix", "config", "get", f"experiment/{self.exp_name}"]
+        )
         assert topo_data
         assert sc_data
         assert exp_data
@@ -88,7 +125,7 @@ class Collector(ComponentBase):
                 if node.hardware.os_type == "windows":
                     self.recv_file(vm, "/minimega/miniccc.log", m_dest)
                 elif node.hardware.os_type == "linux" and node.type != "Router":
-                    self.recv_file(vm, "/miniccc.log", m_dest)
+                    self._recv_linux_miniccc_log(vm, m_dest)
 
         # iperf: client, server, histograms
         iperf_dest = None
@@ -101,12 +138,14 @@ class Collector(ComponentBase):
                 # TODO: remove *.log files if they're empty (no output)?
             else:
                 logger.error(
-                    f"'collect_iperf' is set but 'iperf' component isn't enabled in run/loop stages for run {self.run}"
+                    f"'collect_iperf' is set but no 'iperf' component runs in "
+                    f"loop {self.loop} of run {self.run}"
                 )
 
         if not self.enabled_components.get("disruption"):
             raise ValueError(
-                "'disruption' component isn't enabled but is required for collector!"
+                f"'disruption' component isn't enabled in loop {self.loop} of run "
+                f"{self.run} but is required for collector!"
             )
 
         # disruption: attack_results, scenario_results, scenario_*
@@ -182,7 +221,7 @@ class Collector(ComponentBase):
             "topology": sceptre_topo,
             "scenario": sceptre_scenario,
             "minimega_version": self.mm.version()[0]["Response"],
-            "phenix_version": utils.run_command("phenix version").strip(),
+            "phenix_version": utils.run_command(["phenix", "version"]).strip(),
         }
         record["scorch"] = {
             "run": self.run,
@@ -433,12 +472,28 @@ class Collector(ComponentBase):
 
         return pcap_metadata
 
+    def _recv_linux_miniccc_log(self, vm: str, dst: str) -> None:
+        """Copy a Linux VM's miniccc log, trying each place images write it."""
+        errors = []
+
+        for src in LINUX_MINICCC_LOGS:
+            try:
+                self.recv_file(vm, src, dst)
+                return
+            except RuntimeError as ex:
+                errors.append(str(ex))
+
+        raise RuntimeError(
+            f"no miniccc log in VM {vm} at {' or '.join(LINUX_MINICCC_LOGS)}: "
+            + "; ".join(errors)
+        )
+
     def _comp_dir(self, component_type: str) -> Path:
         """
         NOTE: the output dir is the components *name*, not the *type*.
         Have to lookup name from the type.
         """
-        component_name = self.all_components[component_type].name
+        component_name = self.enabled_components[component_type].name
 
         # TODO: this won't work for things run in configure stage before loops start
         #   workaround this by determining where each component is configured.
@@ -454,13 +509,48 @@ class Collector(ComponentBase):
         return pth
 
     def _check_component(self, component_type: str) -> bool:
-        """Check if component is enabled for this run, and if not, log the fact."""
+        """Check if component is enabled in this loop, and if not, log the fact."""
         if not self.enabled_components.get(component_type):
             logger.info(
-                f"NOTE: skipping '{component_type}' collection as its not defined in scorch metadata or set in any run/loop stage for run {self.run}"
+                f"NOTE: skipping '{component_type}' collection as no such component "
+                f"runs in loop {self.loop} of run {self.run}"
             )
             return False
         return True
+
+
+def _used_component_names(run_config) -> set[str]:
+    """Component names in every stage of a run and of its nested loops.
+
+    phenix stores unused stages and an absent loop as null.
+    """
+    names = set()
+    loop = run_config
+
+    while loop:
+        for stage in loop.values():
+            if isinstance(stage, list):
+                names.update(stage)
+        loop = loop.get("loop")
+
+    return names
+
+
+def _loop_component_names(run_config, depth: int) -> set[str]:
+    """Component names in the stages of the loop ``depth`` levels into a run.
+
+    Depth 0 is the run's own stages, which phenix runs as loop 0.
+    """
+    loop = run_config
+    for _ in range(depth):
+        loop = (loop or {}).get("loop")
+
+    return {
+        name
+        for stage in (loop or {}).values()
+        if isinstance(stage, list)
+        for name in stage
+    }
 
 
 def main():
