@@ -1,20 +1,31 @@
+import contextlib
 import io
 import json
+import os
+import signal
+import socket
 import sys
+import threading
+import time
+import uuid
 
+import minimega
 import pytest
 from box import Box
 from pydantic import BaseModel
 
-from phenix_apps.apps.scorch import ComponentBase
+from phenix_apps.apps.scorch import ComponentBase, app
 from phenix_apps.apps.scorch.app import (
     FilePath,
     Hostname,
     Interface,
     MetadataBlock,
+    StageCanceled,
     Token,
     validate_metadata,
 )
+from phenix_apps.apps.scorch.conftest import scorch_experiment
+from phenix_apps.common import utils
 
 
 class Meta(BaseModel):
@@ -227,3 +238,188 @@ def test_stage_the_component_does_not_implement_skips_metadata(run_component):
     component.execute_stage()  # Component has no cleanup(), so no error
 
     assert component.config is None
+
+
+# How a SCORCH component's stage ends when phenix sends it SIGTERM.
+class _Waits(ComponentBase):
+    """Sets the cc filter, then gets SIGTERM while it waits under it."""
+
+    def __init__(self):
+        ComponentBase.__init__(self, "waits")
+        self.finished = False
+        self.execute_stage()
+
+    def _wait(self):
+        with utils.mm_cc_filtered(self.mm, "uuid=vm-1"):
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.finished = True
+
+    def start(self):
+        self._wait()
+
+    def stop(self):
+        self._wait()
+
+
+@pytest.fixture
+def mm(mocker):
+    fake = mocker.MagicMock(name="mm")
+    mocker.patch.object(ComponentBase, "mm_init", return_value=fake)
+    return fake
+
+
+def _run(component_args, stage, background=False):
+    component = {"name": "w", "type": "waits", "metadata": {}}
+    if background:
+        component["background"] = True
+    files_dir = component_args(
+        scorch_experiment([component], [{"start": ["w"], "stop": ["w"]}]), stage, "w"
+    )
+    return files_dir / "scorch/run-0/w/loop-0-count-0"
+
+
+@pytest.mark.parametrize(
+    ("stage", "background"),
+    [("start", False), ("stop", False), ("stop", True)],
+    ids=["foreground-start", "foreground-stop", "background-components-stop"],
+)
+def test_sigterm_cancels_the_stage_and_runs_its_finally_blocks(
+    component_args, mm, mocker, stage, background
+):
+    out = _run(component_args, stage, background)
+
+    with pytest.raises(RuntimeError, match="stage canceled by signal 15"):
+        _Waits()
+
+    assert mm.method_calls == [
+        mocker.call.cc_filter("uuid=vm-1"),
+        mocker.call.clear_cc_filter(),
+    ]
+    (status,) = out.glob(f"{stage}-*.json")
+    assert "stage canceled by signal 15" in json.loads(status.read_text())["return"]
+
+
+def test_a_background_start_ignores_sigterm(component_args, mm):
+    _run(component_args, "start", background=True)
+
+    component = _Waits()
+
+    assert component.finished
+
+
+def test_a_background_start_without_a_type_ignores_sigterm(component_args, mm):
+    # phenix core defaults an omitted type to the component's name
+    component = {"name": "waits", "background": True, "metadata": {}}
+    component_args(
+        scorch_experiment([component], [{"start": ["waits"]}]), "start", "waits"
+    )
+
+    assert _Waits().finished
+
+
+class _FakeMinimega:
+    """A minimega socket that answers each command with ``reply-to:<command>``,
+    in order, on every connection, except that with ``silent_first`` it never
+    answers on the first connection and sets ``first_command`` once a command
+    arrives there."""
+
+    def __init__(self, path, silent_first=False):
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(path)
+        self.server.listen()
+        self.silent_first = silent_first
+        self.first_command = threading.Event()
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        silent = self.silent_first
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(
+                target=self._serve, args=(conn, silent), daemon=True
+            ).start()
+            silent = False
+
+    def _serve(self, conn, silent):
+        # The peer may close the connection with a reply still unsent.
+        with contextlib.suppress(OSError), conn:
+            self._answer(conn, silent)
+
+    def _answer(self, conn, silent):
+        decoder, buf = json.JSONDecoder(), ""
+        while data := conn.recv(4096):
+            buf += data.decode()
+            while buf:
+                try:
+                    msg, end = decoder.raw_decode(buf)
+                except ValueError:
+                    break
+                buf = buf[end:]
+                if silent:
+                    self.first_command.set()
+                    continue
+                resp = {"Response": f"reply-to:{msg['Command']}", "Error": ""}
+                conn.sendall(
+                    (json.dumps({"Resp": [resp], "More": False}) + "\n").encode()
+                )
+
+
+def test_a_cancel_inside_a_request_leaves_later_calls_their_own_replies():
+    """The cc filter clear in a finally block must not read the reply to the
+    request the cancel interrupted."""
+    # An abstract socket: a path below tmp_path can exceed AF_UNIX's limit.
+    path = f"\0phenix-apps-test-{uuid.uuid4().hex}"
+    server = _FakeMinimega(path)
+    mm = minimega.minimega(path, True, False, "exp")
+    app._CONNECTIONS.add(mm)
+
+    try:
+        # A request whose reply the cancel left unread.
+        mm._socket.sendall(
+            json.dumps({"Command": "namespace exp cc prefix x"}).encode()
+        )
+
+        with pytest.raises(StageCanceled):
+            app._cancel_stage(signal.SIGTERM, None)
+
+        (resp,) = mm.clear_cc_filter()
+        assert resp["Response"] == "reply-to:namespace exp clear cc filter"
+    finally:
+        app._CONNECTIONS.discard(mm)
+        server.server.close()
+
+
+def test_a_sigterm_during_a_blocked_minimega_read_cancels_the_stage():
+    """A real SIGTERM while the stage waits for minimega's reply must raise
+    StageCanceled, not the RuntimeError a reentrant close of the file under
+    the interrupted readline raises, and leave a working connection."""
+    path = f"\0phenix-apps-test-{uuid.uuid4().hex}"
+    server = _FakeMinimega(path, silent_first=True)
+    mm = minimega.minimega(path, True, False, "exp")
+    # Fails the test, rather than hanging it, if the signal never arrives.
+    mm._socket.settimeout(10)
+    app._CONNECTIONS.add(mm)
+
+    def cancel():
+        server.first_command.wait(10)
+        # Let the main thread get into the readline that waits for the reply.
+        time.sleep(0.2)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    previous = signal.signal(signal.SIGTERM, app._cancel_stage)
+    sender = threading.Thread(target=cancel, daemon=True)
+    try:
+        sender.start()
+        with pytest.raises(StageCanceled):
+            mm.cc_prefix("x")
+
+        (resp,) = mm.clear_cc_filter()
+        assert resp["Response"] == "reply-to:namespace exp clear cc filter"
+    finally:
+        sender.join(15)
+        signal.signal(signal.SIGTERM, previous)
+        app._CONNECTIONS.discard(mm)
+        server.server.close()

@@ -152,11 +152,12 @@ class PCAP(ComponentBase):
                 # special processing for TCP flood packets
                 dos_targets = []
                 for comp in self.extract_app("scorch").metadata.components:
-                    if (
-                        comp.type == "disruption"
-                        and comp.metadata.current_disruption
-                        in ["dos", "cyber_physical"]
-                    ):
+                    # phenix core defaults an omitted or empty type to the name
+                    ctype = comp.get("type") or comp.name
+                    if ctype == "disruption" and comp.metadata.current_disruption in [
+                        "dos",
+                        "cyber_physical",
+                    ]:
                         dos_targets = [t.hostname for t in comp.metadata.dos.targets]
                         break
 
