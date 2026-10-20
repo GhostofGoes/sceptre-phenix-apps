@@ -44,3 +44,22 @@ CC_CMD_GRACE = float(os.getenv("PHENIX_CC_CMD_GRACE", 0.0))
 # Seconds before the first "still waiting" log line, doubling up to the max
 CC_LOG_INTERVAL = float(os.getenv("PHENIX_CC_LOG_INTERVAL", 10.0))
 CC_LOG_MAX_INTERVAL = float(os.getenv("PHENIX_CC_LOG_MAX_INTERVAL", 320.0))
+
+# Suffixes Docker Compose deployments add to the phenix and minimega container
+# hostnames: the default of phenix core's --hostname-suffixes.
+DEFAULT_HOSTNAME_SUFFIXES = ("-minimega", "-phenix")
+
+
+def hostname_suffixes() -> tuple[str, ...]:
+    """The suffixes phenix core trims from host names to tell the headnode.
+
+    Read from ``PHENIX_HOSTNAME_SUFFIXES`` at each call, as phenix passes its
+    --hostname-suffixes to apps and SCORCH components: comma-separated, split
+    as core splits it. Unset means core's defaults; set but empty means none.
+    """
+    value = os.environ.get("PHENIX_HOSTNAME_SUFFIXES")
+
+    if value is None:
+        return DEFAULT_HOSTNAME_SUFFIXES
+
+    return tuple(suffix for suffix in value.split(",") if suffix)

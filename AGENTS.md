@@ -131,6 +131,7 @@ Most environment variables are read in
 | `PHENIX_DIR`, `PHENIX_TEMP_DIR` | phēnix data and scratch directories |
 | `MM_FILEPATH`, `MM_SOCKET_PATH` | minimega file root and command socket |
 | `PHENIX_CC_*` | miniccc polling rates and timeout grace periods |
+| `PHENIX_HOSTNAME_SUFFIXES` | Host name suffixes phēnix passes apps and components; `is_headnode` trims them (unset: `-minimega,-phenix`; empty: none) |
 
 Read elsewhere: `PHENIX_DRYRUN` (literal `true`) in
 `src/python/phenix_apps/apps/__init__.py`,

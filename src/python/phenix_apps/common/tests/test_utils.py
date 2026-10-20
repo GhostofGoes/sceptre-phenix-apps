@@ -1,3 +1,6 @@
+import socket
+import uuid
+
 import minimega
 import pytest
 
@@ -1080,6 +1083,99 @@ def test_mm_cc_once_waits_for_the_client_then_queues_once(mocker, background, me
 
 
 @pytest.mark.parametrize(
+    ("hostname", "compute", "local"),
+    [
+        ("phenix-head", "phenix-head", True),
+        # A shared prefix is another host.
+        ("phenix-head", "phenix-c1", False),
+        ("head", "head2", False),
+        # Docker Compose suffixes, as phenix core trims them.
+        ("myhost-phenix", "myhost-minimega", True),
+    ],
+)
+def test_mm_compute_cmd_runs_locally_only_on_this_host(
+    mocker, monkeypatch, hostname, compute, local
+):
+    monkeypatch.delenv("PHENIX_HOSTNAME_SUFFIXES", raising=False)
+    monkeypatch.setattr(utils.socket, "gethostname", lambda: hostname)
+    send = mocker.patch.object(utils, "_mm_socket_cmd", return_value=[])
+    mm = mocker.MagicMock(name="mm", _namespace=None)
+
+    utils.mm_compute_cmd(
+        mm, experiment="exp", computes=compute, command_type="tap", command="delete t"
+    )
+
+    cmd = send.call_args.args[0]
+    if local:
+        assert cmd == "namespace exp tap delete t"
+    else:
+        assert cmd == f"namespace exp mesh send {compute} tap delete t"
+
+
+@pytest.mark.parametrize(
+    ("value", "suffixes"),
+    [
+        (None, ("-minimega", "-phenix")),
+        ("", ()),
+        ("-mm", ("-mm",)),
+        ("-mm,-px", ("-mm", "-px")),
+        (",-mm,", ("-mm",)),
+    ],
+    ids=["unset", "empty", "one", "two", "blank-entries"],
+)
+def test_hostname_suffixes_follow_what_phenix_passes(monkeypatch, value, suffixes):
+    """Unset means core's defaults; set but empty means none, as phenix's
+    --hostname-suffixes is then empty."""
+    if value is None:
+        monkeypatch.delenv("PHENIX_HOSTNAME_SUFFIXES", raising=False)
+    else:
+        monkeypatch.setenv("PHENIX_HOSTNAME_SUFFIXES", value)
+
+    assert settings.hostname_suffixes() == suffixes
+
+
+@pytest.mark.parametrize(
+    ("value", "hostname", "node", "local"),
+    [
+        # phenix's own suffixes, not the defaults.
+        ("-mm", "head-mm", "head", True),
+        (None, "head-mm", "head", False),
+        # No suffixes: a Docker Compose suffix is part of the name.
+        ("", "myhost-phenix", "myhost-minimega", False),
+        (None, "myhost-phenix", "myhost-minimega", True),
+    ],
+    ids=["custom", "custom-unset", "none", "none-unset"],
+)
+def test_is_headnode_trims_the_suffixes_phenix_passes(
+    monkeypatch, value, hostname, node, local
+):
+    monkeypatch.setattr(utils.socket, "gethostname", lambda: hostname)
+
+    if value is None:
+        monkeypatch.delenv("PHENIX_HOSTNAME_SUFFIXES", raising=False)
+    else:
+        monkeypatch.setenv("PHENIX_HOSTNAME_SUFFIXES", value)
+
+    assert utils.is_headnode(node) is local
+
+
+def test_is_headnode_reads_the_suffixes_at_each_call(mocker, monkeypatch):
+    """A long-lived process sees a change, and minimega's first host is
+    trimmed the same way."""
+    monkeypatch.setattr(utils.socket, "gethostname", lambda: "other")
+    mm = mocker.MagicMock(name="mm", _namespace=None)
+    mm.host.return_value = [
+        {"Host": "head-mm", "Header": ["name"], "Tabular": [["head-mm"]]}
+    ]
+
+    monkeypatch.setenv("PHENIX_HOSTNAME_SUFFIXES", "-mm")
+    assert utils.is_headnode("head-px", mm) is False
+
+    monkeypatch.setenv("PHENIX_HOSTNAME_SUFFIXES", "-mm,-px")
+    assert utils.is_headnode("head-px", mm) is True
+
+
+@pytest.mark.parametrize(
     "tshark", ["echo partial; exit 2", None], ids=["fails", "missing"]
 )
 def test_pcap_to_jsonl_leaves_no_output_when_it_fails(tmp_path, monkeypatch, tshark):
@@ -1135,6 +1231,72 @@ def test_record_failure_records_errors_and_lets_a_cancel_through():
         raise KeyboardInterrupt
 
     assert failures == ["vm-1: no client"]
+
+
+@pytest.mark.parametrize(
+    ("compute", "local"), [("foo-mm", True), ("c1", False)], ids=["head", "compute"]
+)
+def test_mm_compute_cmd_knows_the_headnode_by_minimegas_own_name(
+    mocker, monkeypatch, compute, local
+):
+    """phenix's --hostname-suffixes may differ from the default suffixes, and
+    minimega refuses a mesh send to itself."""
+    monkeypatch.setattr(utils.socket, "gethostname", lambda: "foo-px")
+    send = mocker.patch.object(utils, "_mm_socket_cmd", return_value=[])
+    mm = mocker.MagicMock(name="mm", _namespace=None)
+    mm.host.return_value = [
+        {"Host": "foo-mm", "Header": ["name"], "Tabular": [["foo-mm"]]},
+        {"Host": "c1", "Header": ["name"], "Tabular": [["c1"]]},
+    ]
+
+    utils.mm_compute_cmd(
+        mm, experiment="exp", computes=compute, command_type="tap", command="delete t"
+    )
+
+    cmd = send.call_args.args[0]
+    if local:
+        assert cmd == "namespace exp tap delete t"
+    else:
+        assert cmd == f"namespace exp mesh send {compute} tap delete t"
+
+
+@pytest.mark.parametrize("ignore_error", [False, True])
+def test_mm_compute_cmd_raises_when_minimega_cannot_be_reached(
+    mocker, monkeypatch, tmp_path, ignore_error
+):
+    """ignore_error returns minimega's errors; it does not hide a dead socket."""
+    monkeypatch.setattr(settings, "MM_SOCKET_PATH", str(tmp_path / "none"))
+    mm = mocker.MagicMock(name="mm", _namespace=None)
+
+    with pytest.raises(RuntimeError, match="Command failed"):
+        utils.mm_compute_cmd(
+            mm,
+            experiment="exp",
+            computes="c1",
+            command_type="tap",
+            command="delete t",
+            ignore_error=ignore_error,
+        )
+
+
+def test_mm_compute_cmd_raises_on_a_minimega_error(mocker, monkeypatch):
+    """A minimega error in the reply is raised as a RuntimeError naming it."""
+    path = f"\0phenix-apps-test-{uuid.uuid4().hex}"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(path)
+        server.listen()
+        monkeypatch.setattr(settings, "MM_SOCKET_PATH", path)
+        mocker.patch.object(
+            utils,
+            "_mm_get_response",
+            return_value={"Resp": [{"Host": "c1", "Error": "tap already on bridge"}]},
+        )
+        mm = mocker.MagicMock(name="mm", _namespace=None)
+
+        with pytest.raises(RuntimeError, match="tap already on bridge"):
+            utils.mm_compute_cmd(
+                mm, experiment="exp", computes="c1", command_type="tap", command="x"
+            )
 
 
 def test_run_command_runs_an_argument_vector_without_a_shell(tmp_path, monkeypatch):

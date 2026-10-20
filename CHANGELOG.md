@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OT-sim/Wind Turbine Apps**: Fail on half-configured CPU API TLS (breaking).
 - **OT-sim/Wind Turbine Apps**: Host `cpu-module` must keep app-level TLS (breaking).
 - **OT-sim App**: Analog Modbus points default to two-register `int32` (breaking).
+- **mgmt_tap App**: Name host taps `mgmt_<hash>`; failed creates fail (breaking).
+- **mgmt_tap App**: Fail a cleanup that leaves a tap (breaking).
 - **OT-sim App**: Reject unknown `fep` `downstream` protocols (breaking).
 - **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
 - **SCORCH ettercap/trafficgen/tcpdump**: Teardown waits `PHENIX_CC_TEARDOWN_GRACE`, 20 s, per client (breaking).
@@ -39,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: The device-type table is `configs/infrastructures.yaml`; adding a device type needs no code change.
 - **SCEPTRE App**: Injections are declared with `Sceptre.inject()`, and all of them in the configure stage.
 - **Common**: `utils.abs_path()` always returns a `Path`.
+- **Common**: `mm_compute_cmd` raises on socket failures, even with `ignore_error` (breaking).
 - **SCEPTRE App**: Type annotations on every app function, `Final` on module constants.
 - **SCEPTRE App**: Validation failures raise `error.AppError` instead of calling `sys.exit(1)`, matching the app contract.
 - **SCEPTRE App**: `metadata.simulator` matches case-insensitively in both stages, as validation already did; a miscased name used to silently get the default config.
@@ -83,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
 - **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
 - **SCORCH kafka**: Run listener with component's Python; detect failed starts.
+- **mgmt_tap App**: Give experiments sharing a name prefix separate taps.
 - **SCORCH tcpdump**: Clear the cc filter after start and stop.
 - **SCORCH iperf**: Servers write the JSON results that stop collects.
 - **SCORCH iperf**: Redirect stderr with `2>&1`, not `2>1`.
@@ -109,6 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OT-sim App**: Combine host and app-level `logs` without crashing.
 - **OT-sim App**: Treat a null `cpu-module` or `cpu-module.api` as unset.
 - **Wind Turbine App**: Inject the CPU API TLS files.
+- **mgmt_tap App**: Create taps on hosts sharing the headnode's prefix.
+- **mgmt_tap App**: Recognize the headnode under custom hostname suffixes.
+- **mgmt_tap App**: Leave host taps alone in dry runs.
 - **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
 - **SCORCH mm**: `stop_capture` stops only the named VM interface.
 - **SCORCH pcap**: Reset `snaplen` after starting captures.
