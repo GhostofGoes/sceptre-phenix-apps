@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OT-sim App**: Analog Modbus points default to two-register `int32` (breaking).
 - **mgmt_tap App**: Name host taps `mgmt_<hash>`; failed creates fail (breaking).
 - **mgmt_tap App**: Fail a cleanup that leaves a tap (breaking).
+- **Mirror App**: Exit 1 on failure or unknown stages (breaking).
 - **OT-sim App**: Reject unknown `fep` `downstream` protocols (breaking).
 - **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
 - **SCORCH ettercap/trafficgen/tcpdump**: Teardown waits `PHENIX_CC_TEARDOWN_GRACE`, 20 s, per client (breaking).
@@ -90,6 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
 - **SCORCH kafka**: Run listener with component's Python; detect failed starts.
 - **Apps**: Dry runs log JSON to stderr when `PHENIX_LOG_FILE=stderr`.
+- **Mirror App**: `cleanup` tolerates missing status.
+- **Mirror App**: Pass unknown top-level experiment fields through unchanged.
 - **single-node Scheduler**: Schedule unscheduled VMs on the first cluster host.
 - **mgmt_tap App**: Give experiments sharing a name prefix separate taps.
 - **SCORCH tcpdump**: Clear the cc filter after start and stop.
