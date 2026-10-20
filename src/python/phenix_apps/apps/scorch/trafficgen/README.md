@@ -21,3 +21,10 @@ metadata:
       rate: 20
       probability: 1.25
 ```
+
+Each start command waits for the VM's miniccc client, for
+`PHENIX_CC_CLIENT_GRACE` seconds (default 300) at most. The stop and cleanup
+stages wait `PHENIX_CC_TEARDOWN_GRACE` seconds (default 20) at most for each
+client, so that one VM without a client cannot use up the time phenix gives a
+canceled run's teardown. They run their command in every VM even when one has no
+client, then fail naming each VM they could not reach.

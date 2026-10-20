@@ -29,6 +29,14 @@ class Caldera(ComponentBase):
         self.__run("cleanup")
 
     def __run(self, stage):
+        mm = self.mm_init()
+
+        # Each API call sends its script to the server and runs it there, which
+        # aims the cc filter at the server's UUID.
+        with utils.mm_cc_filtered(mm):
+            self.__operate(stage, mm)
+
+    def __operate(self, stage, mm):
         server = self.metadata.get("server")
         adversary = self.metadata.get("adversary")
         facts = self.metadata.get("facts")
@@ -53,7 +61,6 @@ class Caldera(ComponentBase):
         templates = utils.abs_path(__file__, "templates/")
 
         op = {"name": self.name}
-        mm = self.mm_init()
 
         try:
             uuid.UUID(adversary)

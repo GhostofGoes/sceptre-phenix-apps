@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Build System**: `Mako>=1.3.10`, `requests>=2.32.4` (security advisories).
 - **Build System**: Require `minimega>=3.3.0` for per-interface capture stops.
 - **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
+- **SCORCH ettercap/trafficgen/tcpdump**: Teardown waits `PHENIX_CC_TEARDOWN_GRACE`, 20 s, per client (breaking).
 - **SCEPTRE App**: Register numbering state is per `FieldDeviceConfig` instead of class-level mutable state on `Register`; numbering is no longer order-dependent across configs and the test suite runs safely in parallel. Output is unchanged.
 - **SCEPTRE App**: `configure()` and `pre_start()` are stage classes, `ConfigureStage` and `PreStart`, sharing pre-start state through `PreStartState`.
 - **SCEPTRE App**: The device-type table is `configs/infrastructures.yaml`; adding a device type needs no code change.
@@ -61,21 +62,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH pcap**: Stop only its own captures; needs minimega 3.3.0.
 - **SCORCH pcap**: Set or clear the filter before capturing.
 - **SCORCH mm**: Quote multi-word filters; reset filter and `snaplen` afterwards.
+- **SCORCH art**: Fail before running when a VM lacks `goart`.
+- **SCORCH art**: Honor `goartPath`, `outputPath` and `execWaitSeconds` options.
+- **SCORCH disruption**: Wait for the `dos` `start_delay`, attack and results.
+- **SCORCH trafficgen**: Read malware `rate` and `probability` from `malwareClient`.
 - **SCORCH ssh**: Fail the stage on failed commands or fetches.
 - **SCORCH erspan**: Fail configure at the first failing `ovs-vsctl` command.
 - **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
 - **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
 - **SCORCH kafka**: Run listener with component's Python; detect failed starts.
 - **SCORCH tcpdump**: Clear the cc filter after start and stop.
+- **SCORCH iperf**: Servers write the JSON results that stop collects.
+- **SCORCH iperf**: Redirect stderr with `2>&1`, not `2>1`.
 - **SCORCH vmstats**: Remove the `vmstat=1` VM tag at stop.
 - **SCORCH vmstats**: Clear the cc filter even when `pkill` fails.
 - **SCORCH cc**: Clear `exec` cc filters after each command.
 - **SCORCH hoststats**: Flush promptly on SIGTERM; fail on poll errors.
 - **SCORCH snort**: Collect and delete every `snort.log.<time>` packet log.
+- **SCORCH disruption**: Round start times across hour boundaries without `ValueError`.
 - **SCORCH**: `mm_kill_process`, `mm_delete_file` and `ComponentBase` checks clear cc filters.
 - **SCORCH snort**: Clear the cc filter after each stage's commands.
+- **SCORCH ettercap**: Clear each VM's cc filter after its commands.
+- **SCORCH trafficgen**: Clear the cc filter after each script command.
+- **SCORCH iperf**: Clear the cc filter after each queued command.
+- **SCORCH disruption**: Clear the attacker's cc filter after each command.
 - **SCORCH opcexport**: Clear the OPC host's cc filter after commands.
 - **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
+- **SCORCH art**: Clear the cc filter after each goart command.
+- **SCORCH caldera**: Clear the server's cc filter after each stage.
 - **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
 - **SCORCH mm**: `stop_capture` stops only the named VM interface.
 - **SCORCH pcap**: Reset `snaplen` after starting captures.
@@ -83,13 +97,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Common**: Escape backslashes and quotes in capture filters.
 - **SCORCH opcexport**: Delete the Windows log with `del`, not `rm`.
 - **Common**: Windows file deletes no longer hang multi-host namespaces.
+- **SCORCH disruption**: Shorten, never lengthen, a `dos` attack to fit.
+- **SCORCH art**: Pass each `testName`, `env` and `inputs` value whole.
+- **SCORCH art**: Report goart failures; `abortOnError` fails the stage.
 - **SCORCH vmstats**: Delete `/vmstat.out` by name; always remove the tag.
+- **SCORCH**: Queue snort, ettercap, trafficgen, tcpdump and iperf commands once.
 - **SCORCH snort**: Wait for Snort to exit before copying logs.
+- **SCORCH iperf**: Clear the cc prefix right after queuing.
 - **SCORCH**: Canceled foreground stages run `finally` blocks on fresh connections.
 - **SCORCH pcap**: Find a `disruption` component that omits its `type`.
 - **SCORCH erspan**: Clean up its mirror by output port.
 - **SCORCH mm**: Convert captures only once minimega stops writing them.
+- **SCORCH ettercap/trafficgen/tcpdump**: Teardown reaches every VM when one fails.
 - **SCORCH pcap/mm/vmstats**: Run every reset; keep the original error.
+- **SCORCH disruption/vmstats**: Launch the DoS and vmstat once.
 - **SCORCH hoststats**: Honor a SIGTERM that arrives before start runs.
 - **SCORCH kafka**: A canceled configure kills its just-started listener.
 
@@ -99,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH**: `cc`, `ssh` and `providerdata` transfers stay inside the run directory.
 - **SCORCH mm/tcpdump**: Run tshark without a shell for capture names.
 - **SCORCH pcap/collector**: Run Wireshark tools and phenix without a shell.
+- **SCORCH art/mm/pcap**: Refuse arguments that crash or hang minimega.
 
 ## [2.0.0] - 2026-03-04
 

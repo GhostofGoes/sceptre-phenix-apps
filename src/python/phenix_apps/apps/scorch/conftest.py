@@ -20,6 +20,9 @@ from loguru import logger
 from phenix_apps.apps.scorch.app import ComponentBase
 from phenix_apps.common import utils
 
+# The real wait for a VM's miniccc client, which cc_namespace replaces.
+_LOCATE_CLIENT = utils.mm_cc_client_locate
+
 # The cc calls that queue a command, which takes the namespace's cc filter.
 CC_COMMANDS = (
     "cc_exec",
@@ -189,3 +192,39 @@ def cc_namespace(mocker):
     mocker.patch.object(utils, "mm_send")
     mocker.patch.object(utils, "mm_recv")
     return ns
+
+
+class Unregistered:
+    """The VMs in `vms` never register a miniccc client; `now` is the time the
+    simulated clock shows, in seconds since the test started."""
+
+    def __init__(self):
+        self.vms = set()
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def unregistered(cc_namespace, mocker, monkeypatch):  # noqa: ARG001
+    """Wait for each VM's miniccc client in `cc_namespace` as the real
+    utils.mm_cc_client_locate does, on a simulated clock that a sleep advances.
+    Takes `cc_namespace` to replace its stub for that wait.
+
+    Add a VM's name to the returned `Unregistered.vms` to keep its client away.
+    """
+    state = Unregistered()
+    monkeypatch.setattr(utils.time, "monotonic", state.monotonic)
+    monkeypatch.setattr(utils.time, "sleep", state.sleep)
+    mocker.patch.object(utils, "mm_vm_uuid", side_effect=lambda _mm, vm: vm)
+    mocker.patch.object(
+        utils,
+        "mm_cc_client_seen",
+        side_effect=lambda _mm, vm: None if vm in state.vms else "host",
+    )
+    mocker.patch.object(utils, "mm_cc_client_locate", side_effect=_LOCATE_CLIENT)
+    return state

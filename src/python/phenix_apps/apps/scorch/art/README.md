@@ -64,7 +64,9 @@ present, `testIndex` takes precedence.
 
 `outputPath` overrides the directory where goart writes its JSON results on the
 VM. Defaults to `/phenix/art` for Windows and `/tmp` for Linux. Note that for
-Windows, this path must be accessible to the miniccc process.
+Windows, this path must be accessible to the miniccc process. Both paths become
+part of the command run on the VM, so they may only contain letters, digits,
+`_`, `.`, `-`, `:` and `/`.
 
 `execWaitSeconds` controls how long the component waits after goart finishes
 before attempting to retrieve the results file. Increase this for techniques
@@ -81,7 +83,15 @@ that it failed. For exit zero, anything passed to STDOUT will be streamed to the
 UI, and for exit non-zero anything passed to STDERR will be streamed to the UI.
 If exit non-zero and `abortOnError` is true, then the component exits as failed.
 If no validator is provided then it is assumed the test succeeded if the atomic
-executor exits cleanly.
+executor exits cleanly. If goart itself exits non-zero, the component logs its
+exit code and output as an error, and fails when `abortOnError` is true.
+
+`testName`, `env` and `inputs` values may contain spaces; each reaches goart
+as one argument. minimega reads a command again on each host it relays it
+to, so the component refuses, before running goart anywhere, a value with a
+non-printable character other than a tab or line break, and a value with a
+backslash, a quote or `#` but no space. Write Windows paths without spaces
+with `/`. minimega still expands `$name` in values.
 
 `vms` is a list of settings per VM to execute the test on.
 
