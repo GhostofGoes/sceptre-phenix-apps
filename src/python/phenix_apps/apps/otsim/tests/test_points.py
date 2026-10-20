@@ -293,7 +293,7 @@ def test_fep_serves_modbus_registers_grouped_after_dnp3():
     ] * 4 + [("dnp3", "cap1")] * 4
 
 
-def test_duplicate_points_keep_their_real_addresses():
+def test_a_point_polled_twice_is_served_once():
     rtus = scenario(
         [
             ("rtu", {"type": "fep", "upstream": ["ied", "ied"]}),
@@ -304,7 +304,23 @@ def test_duplicate_points_keep_their_real_addresses():
         ]
     )
     points = [p for p in rtus.points("rtu") if p.variable == "setpt"]
-    assert [(p.kind, p.index) for p in points] == [("ao", 0), ("ao", 1)]
+    assert [(p.kind, p.index) for p in points] == [("ao", 0)]
+
+
+def test_fep_serving_dnp3_and_modbus_maps_each_point_once():
+    rtus = scenario(
+        [
+            (
+                "rtu",
+                {"type": "fep", "upstream": ["ied"], "downstream": ["dnp3", "modbus"]},
+            ),
+            (
+                "ied",
+                {"type": "fd-server", "dnp3": [{"name": "cap1", "type": "capacitor"}]},
+            ),
+        ]
+    )
+    assert summary(rtus.points("rtu")) == summary(rtus.points("ied"))
 
 
 def test_custom_infrastructure_mapping_and_per_host_infrastructure():

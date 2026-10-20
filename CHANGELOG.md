@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OT-sim App**: DNP3 address assignment is a module function (`protocols.dnp3.assign_addresses`)
 - **Build System**: `Mako>=1.3.10`, `requests>=2.32.4` (security advisories).
 - **Build System**: Require `minimega>=3.3.0` for per-interface capture stops.
+- **OT-sim App**: Rename client `.connected` tags to `<protocol>-client-<host>.connected` (breaking).
+- **OT-sim/Wind Turbine Apps**: Fail on half-configured CPU API TLS (breaking).
+- **OT-sim/Wind Turbine Apps**: Host `cpu-module` must keep app-level TLS (breaking).
+- **OT-sim App**: Analog Modbus points default to two-register `int32` (breaking).
+- **OT-sim App**: Reject unknown `fep` `downstream` protocols (breaking).
 - **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
 - **SCORCH ettercap/trafficgen/tcpdump**: Teardown waits `PHENIX_CC_TEARDOWN_GRACE`, 20 s, per client (breaking).
 - **SCEPTRE App**: Register numbering state is per `FieldDeviceConfig` instead of class-level mutable state on `Register`; numbering is no longer order-dependent across configs and the test suite runs safely in parallel. Output is unchanged.
@@ -55,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: A `power-transmission` inverter raised `TypeError`, passing `infrastructure` twice into `Device()`.
 - **SCEPTRE App**: A `fep` without a mgmt interface raised `UnboundLocalError`, or reused the previous fep's endpoints.
 - **SCEPTRE App**: A historian on a subnet with no OPC server was configured with an unrelated OPC's tag list and no address to collect from. It now gets no tags and a warning naming the subnet.
+- **HELICS App**: Track sub-brokers by resolved `ip:port`, fixing pre-start `KeyError`.
+- **OT-sim App**: Fail pre-start on broker script clash with helics.
+- **OT-sim App**: Serve `fep` points with their served protocol's settings.
+- **OT-sim App**: Clients poll exactly what a `fep` serves.
+- **OT-sim App**: Inject only configured CPU API TLS files.
+- **OT-sim App**: Raise `AppError`, naming the host, for missing `helics.broker`.
+- **OT-sim App**: Name `fep` Modbus clients uniquely, as `modbus-client-<upstream host>`.
 - **SCORCH collector**: Tolerate a null `loop`.
 - **SCORCH collector**: Collect per type from its own loop's components.
 - **SCORCH collector**: Read Linux miniccc logs from `/var/log/miniccc.log`, then `/miniccc.log`.
@@ -90,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
 - **SCORCH art**: Clear the cc filter after each goart command.
 - **SCORCH caldera**: Clear the server's cc filter after each stage.
+- **OT-sim App**: Treat a null app-level `cpu-module.api-endpoint` as no default.
+- **OT-sim App**: A null `fep` `downstream` means `dnp3`.
+- **OT-sim App**: Serve each point a `fep` polls once.
+- **OT-sim App**: Accept a null `modbus` setting on analog variables.
+- **OT-sim App**: Combine host and app-level `logs` without crashing.
+- **OT-sim App**: Treat a null `cpu-module` or `cpu-module.api` as unset.
+- **Wind Turbine App**: Inject the CPU API TLS files.
 - **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
 - **SCORCH mm**: `stop_capture` stops only the named VM interface.
 - **SCORCH pcap**: Reset `snaplen` after starting captures.
