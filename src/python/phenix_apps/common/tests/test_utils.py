@@ -2,6 +2,7 @@ import minimega
 import pytest
 
 from phenix_apps.common import settings, utils
+from phenix_apps.testing.minicli import namespaced_rebuild
 
 
 class _FakeClock:
@@ -857,3 +858,289 @@ def test_mm_get_cc_responses_one_result_per_client(monkeypatch):
     assert result["stderr"] == "warn: x"
     assert result["stdout"] == "tcp 0.0.0.0:22 sshd/1"
     assert result["exitcode"] == 0
+
+
+def test_cc_cmd_rows_reads_columns_by_header():
+    # minimega added `issued` after `responses`. Columns are looked up by the
+    # response's header, so an added column does not shift the cell `once` reads.
+    old = ["id", "prefix", "command", "responses", "background", "once"]
+    new = ["id", "prefix", "command", "responses", "issued", "background", "once"]
+
+    (old_row,) = utils._cc_cmd_rows(
+        {"Header": old, "Tabular": [["7", "", "[x]", "1", "false", "[f]"]]}
+    )
+    (new_row,) = utils._cc_cmd_rows(
+        {"Header": new, "Tabular": [["7", "", "[x]", "1", "1", "false", "[f]"]]}
+    )
+    (short_row,) = utils._cc_cmd_rows({"Header": new, "Tabular": [["7"]]})
+
+    assert old_row["once"] == new_row["once"] == "[f]"
+    assert new_row["issued"] == "1"
+    assert "issued" not in old_row
+    assert "responses" not in short_row
+
+
+def test_mm_cc_filtered_sets_the_filter_then_clears_it(mocker):
+    mm = mocker.MagicMock(name="mm")
+
+    with utils.mm_cc_filtered(mm, "hostname=vm-1"):
+        mm.cc_exec_once("true")
+
+    assert mm.method_calls == [
+        mocker.call.cc_filter("hostname=vm-1"),
+        mocker.call.cc_exec_once("true"),
+        mocker.call.clear_cc_filter(),
+    ]
+
+
+def test_mm_cc_filtered_clears_the_filter_when_the_block_fails(mocker):
+    mm = mocker.MagicMock(name="mm")
+    mm.cc_exec_once.side_effect = RuntimeError("boom")
+
+    def block():
+        with utils.mm_cc_filtered(mm):
+            mm.cc_filter("uuid=abc")
+            mm.cc_exec_once("true")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        block()
+
+    # Without its own filter it leaves the current one alone until it exits.
+    assert mm.method_calls == [
+        mocker.call.cc_filter("uuid=abc"),
+        mocker.call.cc_exec_once("true"),
+        mocker.call.clear_cc_filter(),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("call", "command"),
+    [
+        (lambda mm: utils.mm_kill_process(mm, "iperf=1", "iperf3"), "pkill iperf3"),
+        (
+            lambda mm: utils.mm_kill_process(mm, "iperf=1", "x.exe", "windows"),
+            "taskkill -f -im x.exe",
+        ),
+        (
+            lambda mm: utils.mm_delete_file(mm, "iperf=1", "/out.json"),
+            "rm -f /out.json",
+        ),
+    ],
+    ids=["kill-linux", "kill-windows", "delete"],
+)
+def test_filtered_helpers_clear_the_cc_filter(mocker, call, command):
+    mm = mocker.MagicMock(name="mm")
+
+    call(mm)
+
+    assert mm.method_calls == [
+        mocker.call.cc_filter("iperf=1"),
+        mocker.call.cc_exec_once(command),
+        mocker.call.clear_cc_filter(),
+    ]
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "mesh-peer"])
+def test_mm_delete_file_reaches_windows_intact(mocker, remote):
+    """minimega reads an unspaced backslash path once more on each mesh peer,
+    where it fails and leaves the sender waiting for a reply."""
+    mm = mocker.MagicMock(name="mm")
+
+    utils.mm_delete_file(mm, "name=opc", "/opcexport/x.log", os_type="windows")
+
+    cmd = mm.cc_exec_once.call_args.args[0]
+    words = namespaced_rebuild(f"cc exec {cmd}", remote=remote)
+    assert words == ["cc", "exec", "cmd", "/c", "del /q c:\\opcexport\\x.log"]
+
+
+def test_kill_process_sets_no_filter_for_an_unknown_os(mocker):
+    mm = mocker.MagicMock(name="mm")
+
+    with pytest.raises(ValueError, match="unknown os_type 'bsd'"):
+        utils.mm_kill_process(mm, "iperf=1", "iperf3", "bsd")
+
+    assert mm.method_calls == []
+
+
+@pytest.mark.parametrize(
+    ("bpf_filter", "arg"),
+    [
+        (None, "' '"),
+        ("", "' '"),
+        ("arp", "'arp'"),
+        ("udp or arp", "'udp or arp'"),
+        ("ether proto \\ip", "'ether proto \\\\ip'"),
+        ("ether[0] = 'a'", "'ether[0] = \\'a\\''"),
+    ],
+    ids=["none", "empty", "one-word", "multi-word", "backslash", "quote"],
+)
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "mesh-peer"])
+def test_mm_capture_filter_arg_survives_a_namespaced_rebuild(bpf_filter, arg, remote):
+    """A namespaced `capture pcap filter ''` loses its argument and only queries."""
+    assert utils.mm_capture_filter_arg(bpf_filter) == arg
+
+    words = namespaced_rebuild(f"capture pcap filter {arg}", remote=remote)
+
+    assert words[:3] == ["capture", "pcap", "filter"]
+    assert len(words) == 4, "the rebuilt command lost its filter argument"
+    assert words[3].strip() == (bpf_filter or "")
+
+
+def test_an_empty_capture_filter_does_not_survive_a_namespaced_rebuild():
+    """Why the clear is a blank filter: an empty one turns into a query."""
+    assert len(namespaced_rebuild("capture pcap filter ''")) == 3
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plain",
+        "Create a new user in a command prompt",
+        'say "hi" now',
+        "it's ok",
+        "C:\\Program Files\\art",
+        "a # b",
+        "tab\there",
+        "line\nbreak",
+        "café au lait",
+        "C:/Users/art",
+    ],
+)
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "mesh-peer"])
+def test_mm_cc_arg_survives_a_namespaced_rebuild(value, remote):
+    arg = utils.mm_cc_arg(value)
+    words = namespaced_rebuild(f"cc exec goart {arg} -q", remote=remote)
+
+    assert words == ["cc", "exec", "goart", value, "-q"]
+
+
+# Go quotes a word with whitespace and writes these as \u, \x or \a escapes,
+# which minicli does not read: the namespaced lex fails and minimega exits.
+NOT_RELAYABLE_IN_A_QUOTED_WORD = [
+    "a\u00a0b",
+    "a\u2003b",
+    "a\u200bb c",
+    "a\u0007b c",
+    "x \u001b[0m",
+    "a\u00adb c",
+    "a\x7fb c",
+    "a\u2028b",
+    # Unicode 15.1 added these: Go 1.24, at Unicode 15.0, escapes them even
+    # where the running Python prints them.
+    "a\u2ffcb c",
+    "a\U0002ebf0b c",
+]
+# minimega rebuilds a word without whitespace raw, so each hop reads one more
+# level of escapes: no form of these reaches both the local host and a peer.
+NOT_RELAYABLE_WITHOUT_WHITESPACE = ["C:\\Users\\art", "it's", 'a"b', "a#b", "x\\"]
+
+
+@pytest.mark.parametrize(
+    "value", NOT_RELAYABLE_IN_A_QUOTED_WORD + NOT_RELAYABLE_WITHOUT_WHITESPACE
+)
+def test_mm_cc_arg_refuses_what_minimega_cannot_relay(value):
+    with pytest.raises(ValueError, match="holds"):
+        utils.mm_cc_arg(value)
+
+
+@pytest.mark.parametrize("value", NOT_RELAYABLE_IN_A_QUOTED_WORD)
+def test_a_quoted_non_printable_character_fails_the_namespaced_lex(value):
+    """Why mm_cc_arg refuses them: quoting them as it quotes any word with
+    whitespace gives a command minimega cannot lex once rebuilt."""
+    quoted = '"' + value + '"'
+
+    with pytest.raises(ValueError, match="unexpected escaped character"):
+        namespaced_rebuild(f"cc exec goart {quoted} -q")
+
+
+@pytest.mark.parametrize(
+    "bpf_filter", ["tcp\u00a0port 80", "a\\b", "it's", 'say"hi', "port\u0007 80"]
+)
+def test_mm_capture_filter_arg_refuses_what_minimega_cannot_relay(bpf_filter):
+    with pytest.raises(ValueError, match="holds"):
+        utils.mm_capture_filter_arg(bpf_filter)
+
+
+@pytest.mark.parametrize(
+    ("background", "method"),
+    [(False, "cc_exec_once"), (True, "cc_background_once")],
+)
+def test_mm_cc_once_waits_for_the_client_then_queues_once(mocker, background, method):
+    """minimega resends a command that is not once to a client that reconnects,
+    and marks a once command sent even when no client matched it."""
+    mm = mocker.MagicMock(name="mm")
+    locate = mocker.patch.object(utils, "mm_cc_client_locate")
+    locate.side_effect = lambda *_, **__: mm.located()
+
+    utils.mm_cc_once(mm, "vm-1", "rm -rf /var/log/snort", background=background)
+
+    locate.assert_called_once_with(mm, "vm-1", grace=settings.CC_CLIENT_GRACE)
+    assert [c[0] for c in mm.method_calls] == ["located", method]
+    getattr(mm, method).assert_called_once_with("rm -rf /var/log/snort")
+
+
+@pytest.mark.parametrize(
+    "tshark", ["echo partial; exit 2", None], ids=["fails", "missing"]
+)
+def test_pcap_to_jsonl_leaves_no_output_when_it_fails(tmp_path, monkeypatch, tshark):
+    """A partial .jsonl would pass for a finished conversion."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if tshark:
+        (bin_dir / "tshark").write_text(f"#!/bin/sh\n{tshark}\n")
+        (bin_dir / "tshark").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    out = tmp_path / "x.pcap.jsonl"
+
+    if tshark:
+        assert utils.pcap_to_jsonl(tmp_path / "x.pcap", out) == 2
+    else:
+        with pytest.raises(FileNotFoundError):
+            utils.pcap_to_jsonl(tmp_path / "x.pcap", out)
+
+    assert not out.exists()
+
+
+def test_run_cleanups_runs_each_and_keeps_the_block_error(mocker):
+    first = mocker.Mock(side_effect=RuntimeError("socket closed"))
+    second = mocker.Mock()
+
+    with pytest.raises(ValueError, match="the block failed"):
+        with utils.run_cleanups(first, second):
+            raise ValueError("the block failed")
+
+    first.assert_called_once_with()
+    second.assert_called_once_with()
+
+
+def test_run_cleanups_raises_the_first_cleanup_error_after_a_good_block(mocker):
+    first = mocker.Mock(side_effect=RuntimeError("first"))
+    second = mocker.Mock(side_effect=RuntimeError("second"))
+
+    with pytest.raises(RuntimeError, match="first"), utils.run_cleanups(first, second):
+        pass
+
+    second.assert_called_once_with()
+
+
+def test_record_failure_records_errors_and_lets_a_cancel_through():
+    failures = []
+
+    with utils.record_failure(failures, "vm-1"):
+        raise RuntimeError("no client")
+
+    assert failures == ["vm-1: no client"]
+
+    with pytest.raises(KeyboardInterrupt), utils.record_failure(failures, "vm-2"):
+        raise KeyboardInterrupt
+
+    assert failures == ["vm-1: no client"]
+
+
+def test_run_command_runs_an_argument_vector_without_a_shell(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    out = utils.run_command(["printf", "%s", "a$(touch${IFS}PWNED)"])
+
+    assert out == "a$(touch${IFS}PWNED)"
+    assert not (tmp_path / "PWNED").exists()

@@ -66,3 +66,11 @@ for component in readme_components(README, "qos"):
 
 `readme_yaml(readme, heading)` returns every parsed ```yaml block in a
 `## heading` section; `readme_section(readme, heading)` returns its text.
+
+## minimega command lexer
+
+`phenix_apps.testing.minicli` ports minimega's command lexer: `lex(line)` and
+`namespaced_rebuild(command)` return the words minimega delivers for a command,
+the latter after the second pass a namespaced command gets, and with
+`remote=True` after the third pass a mesh peer of the namespace gets. Both
+raise `ValueError` where minimega fails to lex the command.

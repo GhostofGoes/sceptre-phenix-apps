@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import datetime
 import json
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import warnings
+from collections.abc import Callable, Iterator
 from io import StringIO
 from itertools import pairwise
 from pathlib import Path
@@ -26,6 +28,7 @@ from elasticsearch import Elasticsearch
 
 import phenix_apps.common.settings as phenix_settings
 from phenix_apps.common.error import AppError
+from phenix_apps.common.go_unicode import go_is_print
 from phenix_apps.common.logger import logger
 
 
@@ -558,6 +561,91 @@ def mm_cc_filter_vm(
     return uuid, host
 
 
+def mm_cc_once(
+    mm: minimega.minimega,
+    vm: str,
+    cmd: str,
+    background: bool = False,
+    grace: float = phenix_settings.CC_CLIENT_GRACE,
+) -> list:
+    """Queue ``cmd`` once, under the cc filter already set, once ``vm``'s
+    miniccc client has registered.
+
+    minimega resends a command that is not once to every client that connects
+    again, so a guest that restarts would run it again. It marks a once command
+    sent even when no client matched it, so this waits for the client first.
+    """
+    mm_cc_client_locate(mm, vm, grace=grace)
+
+    return (mm.cc_background_once if background else mm.cc_exec_once)(cmd)
+
+
+@contextlib.contextmanager
+def run_cleanups(*cleanups: Callable[[], object]) -> Iterator[None]:
+    """Run the block, then each of ``cleanups``, however the block exits.
+
+    Each cleanup runs even when an earlier one fails. A cleanup's error is
+    logged, and the first is raised once all have run, but only when the block
+    succeeded, so that it never replaces the block's own error.
+    """
+
+    def run_each() -> list[Exception]:
+        errors = []
+        for cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception as ex:
+                logger.error(f"cleanup failed: {ex}")
+                errors.append(ex)
+        return errors
+
+    try:
+        yield
+    except BaseException:
+        run_each()
+        raise
+
+    if errors := run_each():
+        raise errors[0]
+
+
+@contextlib.contextmanager
+def record_failure(failures: list[str], what: str) -> Iterator[None]:
+    """Record an error the block raises in ``failures`` as ``what: error`` and
+    go on, so that a teardown loop reaches every VM; raise once it is done.
+
+    A canceled SCORCH stage is not an ``Exception`` and still ends the loop.
+    """
+    try:
+        yield
+    except Exception as ex:
+        logger.error(f"{what}: {ex}")
+        failures.append(f"{what}: {ex}")
+
+
+@contextlib.contextmanager
+def mm_cc_filtered(
+    mm: minimega.minimega, cc_filter: str | None = None
+) -> Iterator[None]:
+    """Run the block's cc commands under ``cc_filter``, then clear the filter.
+
+    minimega keeps the cc filter as namespace state, so a filter left set aims
+    every later cc command in the namespace, from any component or from phenix,
+    at only the clients it matches. Whatever filter is set when the block exits,
+    its own or one set inside it, such as :func:`mm_exec_wait`'s, is cleared
+    however the block exits, a SCORCH stage canceled with SIGTERM included, but
+    not when the process is killed first. Without ``cc_filter`` the block starts
+    with whatever filter is already set.
+    """
+    if cc_filter:
+        mm.cc_filter(cc_filter)
+
+    try:
+        yield
+    finally:
+        mm.clear_cc_filter()
+
+
 def mm_cc_send_wait(
     mm: minimega.minimega,
     vm: str,
@@ -1050,6 +1138,115 @@ def mm_vm_info(mm: minimega.minimega) -> dict:
     }
 
 
+# minimega rebuilds a namespaced command from its parsed arguments and drops an
+# empty one (minicli inputItems.String), so `capture pcap filter ''` sent in a
+# namespace becomes a query that leaves the filter set. A blank filter keeps its
+# quotes through that rebuild, and libpcap compiles it to match every packet.
+MM_NO_CAPTURE_FILTER = "' '"
+
+
+def mm_capture_filter_arg(bpf_filter: str | None) -> str:
+    """The ``capture pcap filter`` argument that sets ``bpf_filter``.
+
+    Single quotes keep a multi-word filter one argument. minicli reads every
+    backslash as an escape, so backslashes and single quotes are escaped.
+    Without a filter it is :data:`MM_NO_CAPTURE_FILTER`, which clears the
+    namespace's filter.
+
+    Raises:
+        ValueError: if minimega cannot relay the filter intact; see
+            :func:`mm_cc_arg`.
+    """
+    if not bpf_filter:
+        return MM_NO_CAPTURE_FILTER
+
+    _check_mm_word(bpf_filter)
+    escaped = bpf_filter.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+# Characters minicli reads as escapes, quotes or a comment.
+_MINICLI_SPECIAL = {
+    "\\": "a backslash",
+    '"': "a double quote",
+    "'": "a single quote",
+    "#": "'#'",
+}
+
+
+def _check_mm_word(value: str) -> None:
+    """Refuse a word that minimega cannot relay through a namespaced command.
+
+    minimega lexes a namespaced command once more per hop: on its own host
+    after rebuilding the command, and again on each mesh peer of the
+    namespace. The rebuild Go-quotes only the words that hold whitespace, so
+    such a word survives every hop if Go writes each of its characters raw or
+    as an escape minicli reads (``\\t``, ``\\n``, ``\\r``): printable as Go
+    1.24 defines it, whatever Unicode version the running Python has (see
+    :mod:`phenix_apps.common.go_unicode`). A word without whitespace is
+    rebuilt raw, so it survives only if it has no character minicli reads
+    specially. A lex that fails makes the local minimega exit or a peer drop
+    the command, leaving the sender waiting for its reply.
+    """
+    for c in value:
+        if not go_is_print(c) and c not in "\t\n\r":
+            raise ValueError(
+                f"holds the non-printable character U+{ord(c):04X}, which "
+                "minimega cannot pass through a namespaced command"
+            )
+
+    if not any(c.isspace() for c in value):
+        for c in value:
+            if c in _MINICLI_SPECIAL:
+                raise ValueError(
+                    f"holds {_MINICLI_SPECIAL[c]} but no whitespace; minimega "
+                    "reads such a word again on every host it relays a "
+                    "namespaced command to, so it cannot pass it intact"
+                )
+
+
+def mm_cc_arg(value: str) -> str:
+    """``value`` as one word of a namespaced ``cc exec`` or ``cc background``.
+
+    minicli splits a command on whitespace and reads backslashes, quotes and an
+    unquoted ``#``. A word with whitespace is double-quoted once, as minimega
+    quotes it again each time it rebuilds the command; any other word is passed
+    as it is. minimega still expands ``$name`` and drops an empty word.
+
+    Raises:
+        ValueError: if ``value`` holds a non-printable character other than
+            tab, newline or carriage return, or a backslash, quote or ``#``
+            without whitespace, which minimega cannot relay intact.
+    """
+    _check_mm_word(value)
+
+    if any(c.isspace() for c in value):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    return value
+
+
+def mm_reconnect(mm: minimega.minimega) -> None:
+    """Give ``mm`` a new connection to its minimega, dropping any reply that is
+    still unread on the old one. Safe to call from a signal handler."""
+    fresh = minimega.minimega(mm._path, mm._raise_errors, mm._debug, mm._namespace)
+    old_socket, old_file = mm._socket, mm._socketfile
+
+    mm._socket, mm._socketfile = fresh._socket, fresh._socketfile
+    mm.moreResponses = False
+
+    # A signal that lands in the old file's readline makes its close() raise
+    # RuntimeError, a reentrant call; the shutdown drops the connection anyway
+    # and the file is closed when it is garbage collected.
+    try:
+        with contextlib.suppress(OSError):
+            old_socket.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError, RuntimeError):
+            old_file.close()
+    finally:
+        old_socket.close()
+
+
 def _mm_init(namespace: str | None = None) -> minimega.minimega:
     """
     The minimega.connect function will print a message to STDOUT if there is
@@ -1247,18 +1444,19 @@ def mm_kill_process(
     process: str,
     os_type: str = "linux",
 ) -> None:
-    mm.cc_filter(cc_filter)
-
-    if os_type == "linux":
-        mm.cc_exec_once(f"pkill {process}")
-    elif os_type == "windows":
-        # -f: forcefully kill
-        # -im: image name to be terminated (iperf3.exe)
-        mm.cc_exec_once(f"taskkill -f -im {process}")
-    else:
+    """Kill ``process`` on the clients ``cc_filter`` matches, then clear the filter."""
+    if os_type not in ("linux", "windows"):
         raise ValueError(
             f"unknown os_type '{os_type}' for mm_kill_process with filter '{cc_filter}'"
         )
+
+    with mm_cc_filtered(mm, cc_filter):
+        if os_type == "linux":
+            mm.cc_exec_once(f"pkill {process}")
+        else:
+            # -f: forcefully kill
+            # -im: image name to be terminated (iperf3.exe)
+            mm.cc_exec_once(f"taskkill -f -im {process}")
 
 
 def mm_delete_file(
@@ -1268,37 +1466,47 @@ def mm_delete_file(
     os_type: str = "linux",
     glob_remove: bool = False,
 ) -> None:
-    mm.cc_filter(cc_filter)
-
+    """Delete ``filepath`` on the clients ``cc_filter`` matches, then clear the
+    filter."""
     if os_type == "linux":
         if glob_remove:
             if not filepath.endswith("*"):
                 filepath += "*"
             # TODO: glob remove relative to arbitrary directory
-            mm.cc_exec_once(
-                f"bash -c '/usr/bin/find / -maxdepth 1 -wholename \"{filepath}\" -type f -print0 | /usr/bin/xargs -0 /bin/rm -f'"
-            )
+            cmd = f"bash -c '/usr/bin/find / -maxdepth 1 -wholename \"{filepath}\" -type f -print0 | /usr/bin/xargs -0 /bin/rm -f'"
         else:
-            mm.cc_exec_once(f"rm -f {filepath}")
+            cmd = f"rm -f {filepath}"
     # TODO: this assumes file to delete is on C drive
     elif os_type == "windows":
         if filepath.startswith("/"):
             filepath = "c:" + filepath
-        filepath = filepath.replace("/", "\\\\\\\\")
+        filepath = filepath.replace("/", "\\")
 
         # glob just works on windows
         if glob_remove and not filepath.endswith("*"):
             filepath += "*"
 
-        mm.cc_exec_once(f"cmd /c del /q {filepath}")
+        # An unspaced backslash path does not reach a mesh peer of the
+        # namespace intact; one word with spaces does, and cmd unquotes it.
+        cmd = f"cmd /c {mm_cc_arg(f'del /q {filepath}')}"
     else:
         raise ValueError(
             f"unknown os_type '{os_type}' for mm_delete_file with filter '{cc_filter}'"
         )
 
+    with mm_cc_filtered(mm, cc_filter):
+        mm.cc_exec_once(cmd)
 
-def run_command(cmd: str, timeout: float | None = None) -> str:
-    result = subprocess.check_output(cmd, shell=True, timeout=timeout)
+
+def run_command(cmd: str | list[str], timeout: float | None = None) -> str:
+    """Run ``cmd`` and return its stdout; raise if it exits nonzero.
+
+    A list runs as an argument vector, without a shell, and is the form to use
+    whenever an argument comes from metadata, such as a path below a SCORCH
+    component's directory, which holds the component's name. A string runs
+    through a shell.
+    """
+    result = subprocess.check_output(cmd, shell=isinstance(cmd, str), timeout=timeout)
     if isinstance(result, bytes):
         result = result.decode()
     return result
@@ -1385,7 +1593,17 @@ def trim_pcap(
     # YYYY-MM-DDThh:mm:ss.nnnnnnnnn[Z|+-hh:mm]
     # editcap -A start-time -B stop-time <infile> <outfile>
     run_command(
-        f"editcap -F {cap_type} -A {start_time.isoformat()} -B {end_time.isoformat()} {src.as_posix()} {edited.as_posix()}"
+        [
+            "editcap",
+            "-F",
+            cap_type,
+            "-A",
+            start_time.isoformat(),
+            "-B",
+            end_time.isoformat(),
+            src.as_posix(),
+            edited.as_posix(),
+        ]
     )
 
     trimmed_size = edited.stat().st_size
@@ -1412,7 +1630,7 @@ def pcap_capinfos(pcap_path: str | Path) -> dict:
 
     {'File name': './br14-0.pcap', 'File type': 'pcap', 'File encapsulation': 'ether', 'File time precision': 'microseconds', 'Packet size limit': '1600', 'Packet size limit min (inferred)': 'n/a', 'Packet size limit max (inferred)': 'n/a', 'Number of packets': '37', 'File size (bytes)': '3862', 'Data size (bytes)': '3246', 'Capture duration (seconds)': '28.975097', 'Start time': '2024-02-21 22:27:36.592584', 'End time': '2024-02-21 22:28:05.567681', 'Data byte rate (bytes/sec)': '112.03', 'Data bit rate (bits/sec)': '896.22', 'Average packet size (bytes)': '87.73', 'Average packet rate (packets/sec)': '1.28', 'SHA256': '2b07c65ec9f00c6ea3334ccd1f49074c4f643c68776a3a8cae990e824cbbf72a', 'SHA1': 'dcc7cb3f070b8757693a30a6e75ddc5542686072', 'Strict time order': 'True', 'Capture hardware': '', 'Capture oper-sys': '', 'Capture application': '', 'Capture comment': ''}
     """
-    capinfo_output = run_command(f"capinfos -T -M {pcap_path}")
+    capinfo_output = run_command(["capinfos", "-T", "-M", str(pcap_path)])
 
     io_obj = StringIO(capinfo_output)
     reader = csv.DictReader(io_obj, delimiter="\t")  # tab-delimited
@@ -1425,6 +1643,34 @@ def pcap_capinfos(pcap_path: str | Path) -> dict:
         )
 
     return results[0]
+
+
+def pcap_to_jsonl(pcap_path: str | Path, json_path: str | Path) -> int:
+    """Write tshark's Elasticsearch JSON lines (``-T ek``) for ``pcap_path`` to
+    ``json_path`` and return tshark's exit code.
+
+    tshark runs from an argument vector, never a shell, because capture file
+    names come from scenario metadata. A failed conversion leaves no
+    ``json_path``, so a later one is not mistaken for done.
+    """
+    json_path = Path(json_path)
+
+    try:
+        with json_path.open("wb") as out:
+            code = subprocess.run(
+                ["tshark", "-r", str(pcap_path), "-T", "ek"],
+                stdout=out,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode
+    except BaseException:
+        json_path.unlink(missing_ok=True)
+        raise
+
+    if code:
+        json_path.unlink(missing_ok=True)
+
+    return code
 
 
 def usec_to_sec(val: int | float) -> float:

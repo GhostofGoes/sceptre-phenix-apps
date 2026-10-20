@@ -30,6 +30,11 @@ CC_EXITCODE_GRACE = float(os.getenv("PHENIX_CC_EXITCODE_GRACE", 10.0))
 # Seconds to wait for a miniccc client to register
 CC_CLIENT_GRACE = float(os.getenv("PHENIX_CC_CLIENT_GRACE", 300.0))
 
+# Seconds a SCORCH stop or cleanup waits for each VM's miniccc client: short,
+# as phenix bounds the stop and cleanup stages of a canceled run together, and
+# minimega redials a disconnected client every 5 seconds.
+CC_TEARDOWN_GRACE = float(os.getenv("PHENIX_CC_TEARDOWN_GRACE", 20.0))
+
 # Seconds to wait for a cc file send or component start to be acknowledged
 CC_SEND_GRACE = float(os.getenv("PHENIX_CC_SEND_GRACE", 300.0))
 
