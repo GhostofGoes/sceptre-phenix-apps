@@ -363,8 +363,8 @@ echo 'DONE!'
                         )
 
                     if not self.dryrun:
-                        mm.cc_filter(filter=f"name={hostname}")
-                        mm.cc_send(str(mm_config))
+                        with utils.mm_cc_filtered(mm, f"name={hostname}"):
+                            mm.cc_send(str(mm_config))
 
                     # Increase all nets' starting IP for next loop
                     if net_info:

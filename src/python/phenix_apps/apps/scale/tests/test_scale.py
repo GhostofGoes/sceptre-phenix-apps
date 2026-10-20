@@ -64,6 +64,7 @@ def test_post_start_logic(mocker, mock_app, mock_minimega, tmp_path):
     # keep real path semantics so the generated .mm paths stay honest
     mock_utils.safe_join.side_effect = real_utils.safe_join
     mock_utils.validate_hostname.side_effect = real_utils.validate_hostname
+    mock_utils.mm_cc_filtered.side_effect = real_utils.mm_cc_filtered
 
     mock_mm_conn = mock_minimega
 
@@ -89,10 +90,22 @@ def test_post_start_logic(mocker, mock_app, mock_minimega, tmp_path):
 
     app.post_start()
 
-    assert mock_mm_conn.cc_filter.call_count == 2
-    assert mock_mm_conn.cc_send.call_count == 2
-    mock_mm_conn.cc_filter.assert_any_call(filter="name=node-1")
-    mock_mm_conn.cc_send.assert_any_call(f"{app.files_dir}/node-1.mm")
+    # Each node's config goes to that node alone, and its filter is cleared
+    # so later cc commands in the namespace reach every client again.
+    calls = [
+        c
+        for c in mock_mm_conn.method_calls
+        if c[0] in ("cc_filter", "cc_send", "clear_cc_filter")
+    ]
+    assert calls == [
+        call
+        for i in (1, 2)
+        for call in (
+            mocker.call.cc_filter(f"name=node-{i}"),
+            mocker.call.cc_send(f"{app.files_dir}/node-{i}.mm"),
+            mocker.call.clear_cc_filter(),
+        )
+    ]
 
 
 def test_discover_plugins(mocker, mock_app):
@@ -380,3 +393,31 @@ def test_missing_plugin_error(mocker, mock_app):
         ValueError, match="Failed to load scale plugin 'non_existent_plugin'"
     ):
         app._get_plugin_instance(profile)
+
+
+def test_post_start_clears_the_cc_filter_when_a_send_fails(
+    mocker, mock_app, mock_minimega, tmp_path
+):
+    mocker.patch("phenix_apps.apps.scale.app.logger")
+    mocker.patch("phenix_apps.apps.scale.app.Progress")
+    mocker.patch("builtins.open", mocker.mock_open())
+    mock_minimega.cc_send.side_effect = RuntimeError("no client")
+
+    app = mock_app
+    app.files_dir = str(tmp_path)
+    app.metadata = {"name": "default", "plugin": "builtin", "count": 1}
+    app.dryrun = False
+    plugin = MagicMock()
+    plugin.get_node_count.return_value = 1
+    plugin.get_hostname.side_effect = lambda i: f"node-{i}"
+    plugin.get_container_count.return_value = 1
+    plugin.get_template_name.return_value = "minimega.mako"
+    app._get_plugin_instance = MagicMock(return_value=plugin)
+    app._process_networks = MagicMock(return_value=None)
+    app._get_gateway = MagicMock(return_value=None)
+    mocker.patch("phenix_apps.apps.scale.app.utils.mako_serve_template")
+
+    with pytest.raises(RuntimeError, match="no client"):
+        app.post_start()
+
+    assert mock_minimega.method_calls[-1] == mocker.call.clear_cc_filter()

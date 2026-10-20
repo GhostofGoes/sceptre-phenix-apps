@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: A historian on a subnet with no OPC server was configured with an unrelated OPC's tag list and no address to collect from. It now gets no tags and a warning naming the subnet.
 - **HELICS App**: Track sub-brokers by resolved `ip:port`, fixing pre-start `KeyError`.
 - **OT-sim App**: Fail pre-start on broker script clash with helics.
+- **SCEPTRE App**: Close Modbus RTU client blocks as `</modbus-client>`.
+- **SCEPTRE App**: Detect Ignition hosts by label or type everywhere.
+- **Caldera App**: Allow server interfaces without a `gateway`.
 - **OT-sim App**: Serve `fep` points with their served protocol's settings.
 - **OT-sim App**: Clients poll exactly what a `fep` serves.
 - **OT-sim App**: Inject only configured CPU API TLS files.
@@ -86,6 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
 - **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
 - **SCORCH kafka**: Run listener with component's Python; detect failed starts.
+- **Apps**: Dry runs log JSON to stderr when `PHENIX_LOG_FILE=stderr`.
+- **single-node Scheduler**: Schedule unscheduled VMs on the first cluster host.
 - **mgmt_tap App**: Give experiments sharing a name prefix separate taps.
 - **SCORCH tcpdump**: Clear the cc filter after start and stop.
 - **SCORCH iperf**: Servers write the JSON results that stop collects.
@@ -106,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
 - **SCORCH art**: Clear the cc filter after each goart command.
 - **SCORCH caldera**: Clear the server's cc filter after each stage.
+- **Scale App**: Clear the cc filter after each post-start send.
 - **OT-sim App**: Treat a null app-level `cpu-module.api-endpoint` as no default.
 - **OT-sim App**: A null `fep` `downstream` means `dnp3`.
 - **OT-sim App**: Serve each point a `fep` polls once.
@@ -132,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH iperf**: Clear the cc prefix right after queuing.
 - **SCORCH**: Canceled foreground stages run `finally` blocks on fresh connections.
 - **SCORCH pcap**: Find a `disruption` component that omits its `type`.
+- **single-node Scheduler**: Skip external nodes; fail without cluster hosts.
 - **SCORCH erspan**: Clean up its mirror by output port.
 - **SCORCH mm**: Convert captures only once minimega stops writing them.
 - **SCORCH ettercap/trafficgen/tcpdump**: Teardown reaches every VM when one fails.
@@ -145,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Apps**: Scale, wind turbine and Ignition names are restricted; protonuke and wireguard reject embedded newlines; wireguard configs are `0600`, sceptre startup scripts `0755`.
 - **SCORCH**: `cc`, `ssh` and `providerdata` transfers stay inside the run directory.
 - **SCORCH mm/tcpdump**: Run tshark without a shell for capture names.
+- **Wireguard App**: Write the private-key config `0600` from creation.
 - **SCORCH pcap/collector**: Run Wireshark tools and phenix without a shell.
 - **SCORCH art/mm/pcap**: Refuse arguments that crash or hang minimega.
 

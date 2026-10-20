@@ -22,7 +22,7 @@ spec:
           interfaces: # interface names default to 'IF<idx>' (in this case, IF0)
           - vlan: WWW
             address: 1.2.3.4/16
-            gateway: 1.2.255.254
+            gateway: 1.2.255.254 # optional; at most one interface may set one
           facts:
           - /path/to/facts.yml
           adversaries:
