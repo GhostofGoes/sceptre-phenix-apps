@@ -159,6 +159,7 @@ Security requirements:
 | `go.yml` | `src/go/**.go`, `go.mod`, `go.sum`, or the workflow file | `make check`, `make coverage` in `src/go` |
 | `codespell.yml` | Every pull request | `codespell` with `.codespellrc` |
 | `dispatch.yml` | Push to `main`, `sandialabs` only | `apps-update` repository dispatch to `sceptre-phenix` |
+| `e2e.yml` | `src/**` or the workflow file; nightly; manual | phenix's E2E workflow: this commit's apps in the phenix shards that install them, on real minimega with KVM guests; nightly adds the slow shards |
 
 Path filters do not cover every build input. Run the relevant local checks after
 changing `pyproject.toml`, a `Makefile`, templates, package data, scripts, or
