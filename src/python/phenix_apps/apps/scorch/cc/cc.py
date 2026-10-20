@@ -36,13 +36,12 @@ class CC(ComponentBase):
             elif cmd.type == "exec":
                 once = cmd.get("once", True)
                 filter_ = cmd.get("filter", None)
-                if filter_:
-                    self.mm.cc_filter(filter_)
 
-                if once:
-                    self.mm.cc_exec_once(cmd.args)
-                else:
-                    self.mm.cc_exec(cmd.args)
+                with utils.mm_cc_filtered(self.mm, filter_):
+                    if once:
+                        self.mm.cc_exec_once(cmd.args)
+                    else:
+                        self.mm.cc_exec(cmd.args)
 
                 logger.info(
                     f"command '{cmd.args}' executed with filter '{filter_}' using cc"
@@ -77,9 +76,10 @@ class CC(ComponentBase):
                     script = self.__send_cmd_as_file(vm.hostname, cmd.args)
 
                     if wait:
-                        results = utils.mm_exec_wait(
-                            self.mm, vm.hostname, script, once=once
-                        )
+                        with utils.mm_cc_filtered(self.mm):
+                            results = utils.mm_exec_wait(
+                                self.mm, vm.hostname, script, once=once
+                            )
 
                         logger.info(
                             f"command '{cmd.args}' executed in VM {vm.hostname} using cc"
@@ -138,12 +138,13 @@ class CC(ComponentBase):
                                 raise RuntimeError("results validation failed")
                             logger.info("results are valid")
                     else:
-                        utils.mm_cc_filter_vm(self.mm, vm.hostname)
+                        with utils.mm_cc_filtered(self.mm):
+                            utils.mm_cc_filter_vm(self.mm, vm.hostname)
 
-                        if once:
-                            self.mm.cc_exec_once(script)
-                        else:
-                            self.mm.cc_exec(script)
+                            if once:
+                                self.mm.cc_exec_once(script)
+                            else:
+                                self.mm.cc_exec(script)
 
                         logger.info(
                             f"command '{cmd.args}' executed in VM {vm.hostname} using cc"
@@ -157,14 +158,13 @@ class CC(ComponentBase):
 
                     script = self.__send_cmd_as_file(vm.hostname, cmd.args)
 
-                    utils.mm_cc_filter_vm(self.mm, vm.hostname)
+                    with utils.mm_cc_filtered(self.mm):
+                        utils.mm_cc_filter_vm(self.mm, vm.hostname)
 
-                    if once:
-                        self.mm.cc_background_once(script)
-                    else:
-                        self.mm.cc_background(script)
-
-                    self.mm.clear_cc_filter()
+                        if once:
+                            self.mm.cc_background_once(script)
+                        else:
+                            self.mm.cc_background(script)
                     logger.info(
                         f"command '{cmd.args}' backgrounded in VM {vm.hostname}"
                     )
@@ -258,8 +258,8 @@ class CC(ComponentBase):
         with Path(cmd_src).open("w") as f:
             f.write(cmd)
 
-        utils.mm_cc_send_wait(self.mm, hostname, cmd_src, self.exp_name)
-        self.mm.clear_cc_filter()
+        with utils.mm_cc_filtered(self.mm):
+            utils.mm_cc_send_wait(self.mm, hostname, cmd_src, self.exp_name)
 
         Path(cmd_src).unlink()
 

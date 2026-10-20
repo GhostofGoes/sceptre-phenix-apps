@@ -66,9 +66,12 @@ class OPCExport(ComponentBase):
 
         # install stuff
         logger.info("Running install script install-python-opc.ps1")
-        utils.mm_exec_wait(
-            self.mm, host, "powershell.exe -File C:/opcexport/install-python-opc.ps1"
-        )
+        with utils.mm_cc_filtered(self.mm):
+            utils.mm_exec_wait(
+                self.mm,
+                host,
+                "powershell.exe -File C:/opcexport/install-python-opc.ps1",
+            )
 
         # This is a bit of a dirty hack to auto-add the route out of the tap
         elastic_ip = self.metadata.get("elastic_ip", "172.16.0.254")
@@ -90,11 +93,12 @@ class OPCExport(ComponentBase):
             target_subnet = ".".join(elastic_ip.split(".")[:-1]) + ".0"
             if tap_ip:  # only configure if one of the tap apps was found
                 logger.info(f"Adding route to {target_subnet} via {tap_ip}")
-                utils.mm_exec_wait(
-                    self.mm,
-                    host,
-                    f"route add {target_subnet} MASK 255.255.255.0 {tap_ip}",
-                )
+                with utils.mm_cc_filtered(self.mm):
+                    utils.mm_exec_wait(
+                        self.mm,
+                        host,
+                        f"route add {target_subnet} MASK 255.255.255.0 {tap_ip}",
+                    )
 
         # verify elasticsearch server is pingable
         # Unfortunately, Test-Connection on Windows 7 isn't very capable and
@@ -128,11 +132,10 @@ class OPCExport(ComponentBase):
 
         # after python is installed, the PATH variable is updated, but miniccc.exe doesn't pickup the change
         # because the process is still running. Therefore, absolute paths are needed.
-        self.mm.cc_filter(f"name={host}")
-        self.mm.cc_background_once(
-            f"C:/Progra~1/Python38/python.exe C:/opcexport/scada_to_elastic.py -u opc.tcp://{host}:4840 -f /opcexport/opc_variables.json -e {elastic_ip}:{elastic_port}"
-        )
-        self.mm.clear_cc_filter()
+        with utils.mm_cc_filtered(self.mm, f"name={host}"):
+            self.mm.cc_background_once(
+                f"C:/Progra~1/Python38/python.exe C:/opcexport/scada_to_elastic.py -u opc.tcp://{host}:4840 -f /opcexport/opc_variables.json -e {elastic_ip}:{elastic_port}"
+            )
 
         # Verify process is still running and didn't error out
         # Hopefully, there are no other python processes running
@@ -169,7 +172,12 @@ class OPCExport(ComponentBase):
         logger.info("Collecting log file for scada_to_elastic.py")
         self.recv_file(host, "/opcexport/scada_to_elastic.log")
         logger.info("Deleting log file")
-        utils.mm_delete_file(self.mm, f"name={host}", "/opcexport/scada_to_elastic.log")
+        utils.mm_delete_file(
+            self.mm,
+            f"name={host}",
+            "/opcexport/scada_to_elastic.log",
+            os_type="windows",
+        )
 
         # TODO: validate that data made it into Elasticsearch
 
@@ -186,11 +194,12 @@ class OPCExport(ComponentBase):
         logger.info(
             f"Running delete_scada_to_elastic.py (host={host}, elastic_ip={elastic_ip}, elastic_port={elastic_port})"
         )
-        utils.mm_exec_wait(
-            self.mm,
-            host,
-            f"C:/Progra~1/Python38/python.exe C:/opcexport/delete_scada_to_elastic.py -e {elastic_ip}:{elastic_port}",
-        )
+        with utils.mm_cc_filtered(self.mm):
+            utils.mm_exec_wait(
+                self.mm,
+                host,
+                f"C:/Progra~1/Python38/python.exe C:/opcexport/delete_scada_to_elastic.py -e {elastic_ip}:{elastic_port}",
+            )
 
         logger.info(f"Cleaned up user component: {self.name}")
 

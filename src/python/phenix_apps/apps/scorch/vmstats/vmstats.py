@@ -1,3 +1,4 @@
+import functools
 import json
 import time
 
@@ -25,9 +26,17 @@ class VMStats(ComponentBase):
             self.mm.vm_tag(vm, "vmstat", "1")
 
         self.mm.clear_cc_prefix()
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_background(f"bash -c 'vmstat -n -t {freq} >> /vmstat.out'")
-        self.mm.clear_cc_filter()
+
+        # Once per VM: minimega resends any other command to a client that
+        # reconnects, which would append a second stream to /vmstat.out.
+        for vm in vms:
+            with utils.mm_cc_filtered(self.mm, f"name={vm} os=linux"):
+                utils.mm_cc_once(
+                    self.mm,
+                    vm,
+                    f"bash -c 'vmstat -n -t {freq} >> /vmstat.out'",
+                    background=True,
+                )
 
         logger.info(f"Started user component: {self.name}")
 
@@ -36,26 +45,35 @@ class VMStats(ComponentBase):
 
         vms = self.__vm_list()
 
-        logger.info("killing vmstat processes")
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_exec_once("pkill vmstat")
-        self.mm.clear_cc_filter()
+        # Each VM's tag is removed even when another VM's removal fails.
+        with utils.run_cleanups(
+            *(functools.partial(self._clear_tag, vm) for vm in vms)
+        ):
+            logger.info("killing vmstat processes")
+            utils.mm_kill_process(self.mm, "vmstat=1 os=linux", "vmstat")
 
-        time.sleep(5.0)
+            time.sleep(5.0)
 
-        for i, vm in enumerate(vms):
-            logger.info(f"transferring /vmstat.out from {vm} ({i + 1} of {len(vms)})")
-            try:
-                utils.mm_recv(
-                    self.mm, vm, "/vmstat.out", str(self.base_dir / f"{vm}.out")
+            for i, vm in enumerate(vms):
+                logger.info(
+                    f"transferring /vmstat.out from {vm} ({i + 1} of {len(vms)})"
                 )
-            except ValueError as ex:
-                raise RuntimeError(f"Failed to get vmstat.out from {vm}: {ex}") from ex
+                try:
+                    utils.mm_recv(
+                        self.mm, vm, "/vmstat.out", str(self.base_dir / f"{vm}.out")
+                    )
+                except ValueError as ex:
+                    raise RuntimeError(
+                        f"Failed to get vmstat.out from {vm}: {ex}"
+                    ) from ex
 
-        logger.info("deleting vmstat.out from VMs")
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_exec_once("rm /vmstat.out")
-        self.mm.clear_cc_filter()
+            # minimega matches a command's filter when it routes the command to
+            # each client, after queuing it returns, and an exec-once command a
+            # client missed is never resent. Target each VM by name, so that
+            # removing the tag below cannot make the rm miss it.
+            logger.info("deleting vmstat.out from VMs")
+            for vm in vms:
+                utils.mm_delete_file(self.mm, f"name={vm}", "/vmstat.out")
 
         stats = []
 
@@ -92,6 +110,10 @@ class VMStats(ComponentBase):
                 f.write(json_record + "\n")
 
         logger.info(f"Stopped user component: {self.name}")
+
+    def _clear_tag(self, vm: str) -> None:
+        logger.info(f"removing the vmstat tag from {vm}")
+        self.mm.clear_vm_tag(vm, "vmstat")
 
     def __vm_list(self) -> list:
         vms = self.metadata.get("vms", None)

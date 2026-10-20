@@ -9,7 +9,19 @@ from phenix_apps.common.logger import logger
 
 class HostStats(ComponentBase):
     def __init__(self):
+        self._stopping = threading.Event()
+
         ComponentBase.__init__(self, "hoststats")
+
+        # phenix stops a background component with SIGTERM and kills it 10 s
+        # later, so the handler wakes the monitor from its poll wait at once.
+        # It replaces the one ComponentBase installs for a background start,
+        # which ignores SIGTERM, before anything else runs, so that a SIGTERM
+        # that arrives before start is not lost. The thread that runs start
+        # only joins the monitor and never takes the event's lock itself, so
+        # the handler cannot deadlock on it.
+        if self.stage == "start" and self.is_background():
+            signal.signal(signal.SIGTERM, lambda *_: self._stopping.set())
 
         self.poll_period = self.metadata.get("pollPeriod", 5)
         self.flush_period = self.metadata.get("flushPeriod", None)
@@ -18,45 +30,57 @@ class HostStats(ComponentBase):
             self.flush_period = self.poll_period
 
         self.resdata = []
-        self.monitor = False
+        self._monitor_error: Exception | None = None
 
         self.execute_stage()
 
     def start(self):
         logger.info(f"Starting user component: {self.name}")
 
-        self.monitor = True
+        # start waits for the SIGTERM phenix sends only to background
+        # components, so in the foreground it would block the pipeline forever.
+        if not self.is_background():
+            raise ValueError(
+                f"hoststats component '{self.name}' must set background: true; "
+                "its start stage runs until phenix stops it"
+            )
 
         thread = threading.Thread(target=self.__run_monitor)
         thread.start()
 
         logger.info(f"Started user component: {self.name}")
 
-        # wait for calling process to send SIGTERM
-        signal.pause()
-        self.monitor = False
+        thread.join()
 
         logger.info(f"Stopping user component: {self.name}")
 
-        thread.join()
         self.__flush_buffer()
+
+        if self._monitor_error is not None:
+            raise RuntimeError(
+                f"hoststats component '{self.name}' stopped polling minimega: "
+                f"{self._monitor_error}"
+            ) from self._monitor_error
 
         logger.info(f"Stopped user component: {self.name}")
 
     def __run_monitor(self):
         count = 0
 
-        while self.monitor:
-            data = self.__get_resdata()
+        try:
+            while not self._stopping.is_set():
+                data = self.__get_resdata()
 
-            if data:
-                self.resdata.extend(data)
+                if data:
+                    self.resdata.extend(data)
 
-            if count % int(self.flush_period / self.poll_period) == 0:
-                self.__flush_buffer()
+                if count % int(self.flush_period / self.poll_period) == 0:
+                    self.__flush_buffer()
 
-            time.sleep(self.poll_period)
-            count += 1
+                self._stopping.wait(self.poll_period)
+                count += 1
+        except Exception as ex:
+            self._monitor_error = ex
 
     def __flush_buffer(self):
         if not self.resdata:

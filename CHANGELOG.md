@@ -61,24 +61,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCORCH pcap**: Stop only its own captures; needs minimega 3.3.0.
 - **SCORCH pcap**: Set or clear the filter before capturing.
 - **SCORCH mm**: Quote multi-word filters; reset filter and `snaplen` afterwards.
+- **SCORCH ssh**: Fail the stage on failed commands or fetches.
 - **SCORCH erspan**: Fail configure at the first failing `ovs-vsctl` command.
 - **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
+- **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
+- **SCORCH kafka**: Run listener with component's Python; detect failed starts.
 - **SCORCH tcpdump**: Clear the cc filter after start and stop.
+- **SCORCH vmstats**: Remove the `vmstat=1` VM tag at stop.
+- **SCORCH vmstats**: Clear the cc filter even when `pkill` fails.
+- **SCORCH cc**: Clear `exec` cc filters after each command.
+- **SCORCH hoststats**: Flush promptly on SIGTERM; fail on poll errors.
 - **SCORCH snort**: Collect and delete every `snort.log.<time>` packet log.
 - **SCORCH**: `mm_kill_process`, `mm_delete_file` and `ComponentBase` checks clear cc filters.
 - **SCORCH snort**: Clear the cc filter after each stage's commands.
+- **SCORCH opcexport**: Clear the OPC host's cc filter after commands.
 - **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
 - **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
 - **SCORCH mm**: `stop_capture` stops only the named VM interface.
 - **SCORCH pcap**: Reset `snaplen` after starting captures.
 - **SCORCH pcap**: Stop every capture before reporting a failed one.
 - **Common**: Escape backslashes and quotes in capture filters.
+- **SCORCH opcexport**: Delete the Windows log with `del`, not `rm`.
 - **Common**: Windows file deletes no longer hang multi-host namespaces.
+- **SCORCH vmstats**: Delete `/vmstat.out` by name; always remove the tag.
 - **SCORCH snort**: Wait for Snort to exit before copying logs.
 - **SCORCH**: Canceled foreground stages run `finally` blocks on fresh connections.
 - **SCORCH pcap**: Find a `disruption` component that omits its `type`.
 - **SCORCH erspan**: Clean up its mirror by output port.
 - **SCORCH mm**: Convert captures only once minimega stops writing them.
+- **SCORCH pcap/mm/vmstats**: Run every reset; keep the original error.
+- **SCORCH hoststats**: Honor a SIGTERM that arrives before start runs.
+- **SCORCH kafka**: A canceled configure kills its just-started listener.
 
 ### Security
 - **Common**: New `validate_hostname()` (phenix v2026.10.02 rules) and `safe_join()` guard hostnames and paths built from metadata; `mm_send()`/`mm_recv()` stay inside the miniccc mount. **Breaking:** rejects `_`, 1-char, all-digit, `all` and `phenix` hostnames.

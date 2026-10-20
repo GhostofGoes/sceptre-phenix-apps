@@ -8,6 +8,16 @@ exe:    phenix-scorch-component-hoststats
 stages: start, stop
 ```
 
+The component must set `background: true` (next to `name` and `type`, not in
+`metadata`). Its start stage polls until phenix stops it at the stop stage, which
+phenix only does for background components; without it, start fails at once
+rather than blocking the pipeline.
+
+phenix stops the start stage with SIGTERM and kills it 10 seconds later. On
+SIGTERM, start stops polling at once, however long `pollPeriod` is, writes what
+it has buffered to `host_stats.jsonl`, and ends. A poll that fails, for example
+because minimega is unreachable, ends start with that error.
+
 ## Metadata Options
 
 ```yaml
@@ -47,6 +57,7 @@ used above aren't suitable.
 components:
   - name: hoststats-example
     type: hoststats
+    background: true
     metadata:
       pollPeriod: 5
       flushPeriod: 5
