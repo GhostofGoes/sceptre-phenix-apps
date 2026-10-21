@@ -1,11 +1,27 @@
+import hashlib
 import ipaddress
-import socket
 
 import minimega
 
 from phenix_apps.apps import AppBase
 from phenix_apps.common.logger import logger
 from phenix_apps.common.utils import _mm_init, mm_compute_cmd, mm_host_info
+
+TAP_PREFIX = "mgmt_"
+# minimega does not create host taps with names longer than 14 characters.
+TAP_NAME_MAX = 14
+# minimega's `tap delete` error for a tap that no longer exists.
+TAP_GONE = "unknown tap"
+
+
+def host_tap_name(exp_name: str) -> str:
+    """Return the host tap name for an experiment.
+
+    The name is derived from a hash of the full experiment name, so experiments
+    whose names share a prefix still get distinct taps on the host.
+    """
+    digest = hashlib.sha256(exp_name.encode("utf-8")).hexdigest()
+    return TAP_PREFIX + digest[: TAP_NAME_MAX - len(TAP_PREFIX)]
 
 
 class MgmtTap(AppBase):
@@ -33,18 +49,15 @@ class MgmtTap(AppBase):
         self.vlan = self.metadata.get("vlan", "MGMT") if self.metadata else "MGMT"
         # Bridge from app metadata, falling back to the experiment default bridge
         self.bridge = self._get_bridge()
-        # Must limit the tap_name to 14 characters. minimega won't create the host taps otherwise
-        self.exp_name = self.exp_name[:9]
-        self.vlan_name = self.exp_name[:4]
-        self.tap = f"{self.exp_name}_{self.vlan_name.lower()}"
-        self.ns = f"{self.exp_name}_net"
+        # The full experiment name is the minimega namespace; only the host tap
+        # name has a length limit.
+        self.tap = host_tap_name(self.exp_name)
         self._mm = None  # minimega connection
         # Get list of mesh hosts
         self.hosts = self._get_hosts()
         if not self.hosts:
             logger.error("No hosts found in 'mgmt_tap' application!")
             raise RuntimeError("No hosts found in mgmt_tap application")
-        self.hostname = socket.gethostname().split("-")[0]
 
     def _get_bridge(self) -> str:
         """Determine which OVS bridge the tap should be created on.
@@ -87,18 +100,39 @@ class MgmtTap(AppBase):
             logger.error(f"Failed to get host information: {e}")
             raise RuntimeError(f"Failed to get host information: {e}") from e
 
+    def _tap(self, host: str, command: str) -> str:
+        """Run ``tap <command>`` in the experiment's namespace on ``host``;
+        return minimega's error for it, empty when it succeeded."""
+        resps = mm_compute_cmd(
+            self._get_mm_connection(),
+            experiment=self.exp_name,
+            computes=host,
+            command_type="tap",
+            command=command,
+            ignore_error=True,
+        )
+        # minimega answers nothing for a host its mesh has no route to.
+        if not resps:
+            return "minimega got no reply from it"
+        return "; ".join(resp["Error"] for resp in resps if resp.get("Error"))
+
     def post_start(self):
         logger.info(f"Running post_start for user application: {self.name}")
         # Create tap
         vlan = self.experiment.status.vlans.get(self.vlan, None)
         if vlan is None:
             logger.error(f"Cannot find VLAN ID for alias {self.vlan}")
-            raise RuntimeError("Cannot find VLAN ID for alias {self.vlan}")
+            raise RuntimeError(f"Cannot find VLAN ID for alias {self.vlan}")
         if self.subnet:
             network = ipaddress.ip_network(self.subnet, strict=False)
         else:
             network = ipaddress.ip_network("172.16.0.0/16", strict=False)
         hosts = network.hosts()
+
+        # A dry run has no real VLANs, so a tap would land untagged on the bridge.
+        if self.dryrun:
+            logger.info(f"Dry run: not creating host tap {self.tap} for {self.name}")
+            return
 
         for _idx, host in enumerate(self.hosts, start=1):
             try:
@@ -109,28 +143,34 @@ class MgmtTap(AppBase):
 
             ip_ = f"{ip_addr}/{network.prefixlen}"
             logger.debug(f"Creating host tap {ip_} on {host} (bridge: {self.bridge})")
-            kwargs = {
-                "experiment": self.exp_name,
-                "computes": host,
-                "command_type": "tap",
-                "command": f"create {vlan} bridge {self.bridge} ip {ip_} {self.tap}",
-                "ignore_error": True,
-            }
-            mm_obj = self._get_mm_connection()
-            mm_compute_cmd(mm_obj, **kwargs)
+            failed = f"mgmt_tap could not create host tap {self.tap} on {host}"
+            try:
+                error = self._tap(
+                    host, f"create {vlan} bridge {self.bridge} ip {ip_} {self.tap}"
+                )
+            except RuntimeError as ex:
+                raise RuntimeError(f"{failed}: {ex}") from ex
+            if error:
+                raise RuntimeError(f"{failed}: {error}")
         logger.info(f"Completed post_start for user application: {self.name}")
 
     def cleanup(self):
         logger.info(f"Running cleanup for user application: {self.name}")
-        # remove management network tap
-        for _, host in enumerate(self.hosts, start=1):
-            kwargs = {
-                "experiment": self.exp_name,
-                "computes": host,
-                "command_type": "tap",
-                "command": f"delete {self.tap}",
-                "ignore_error": True,
-            }
-            mm_obj = self._get_mm_connection()
-            mm_compute_cmd(mm_obj, **kwargs)
+        if self.dryrun:
+            logger.info(f"Dry run: not removing host tap {self.tap} for {self.name}")
+            return
+        # Remove the management network tap from every host, then report the
+        # hosts where that failed for any reason but the tap being gone.
+        failures = []
+        for host in self.hosts:
+            try:
+                error = self._tap(host, f"delete {self.tap}")
+            except RuntimeError as ex:
+                error = str(ex)
+            if error and TAP_GONE not in error:
+                failures.append(f"{host}: {error}")
+        if failures:
+            raise RuntimeError(
+                f"mgmt_tap could not delete host tap {self.tap}: {'; '.join(failures)}"
+            )
         logger.info(f"Completed cleanup for user application: {self.name}")

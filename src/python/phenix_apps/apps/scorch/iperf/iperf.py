@@ -73,7 +73,6 @@ class Iperf(ComponentBase):
                     os_type=os_type,
                 )
 
-        self.mm.clear_cc_filter()
         sleep(2.0)
 
     def _delete_all_iperf(self, node_info: dict):
@@ -92,7 +91,6 @@ class Iperf(ComponentBase):
                     glob_remove=True,
                 )
 
-        self.mm.clear_cc_filter()
         sleep(2.0)
 
     def _build_iperf_mapping(self) -> Box:
@@ -237,43 +235,46 @@ class Iperf(ComponentBase):
             f"starting iperf3 for {len(node_info['vms'])} VMs with {len(self.metadata.servers)} iperf servers"
         )
 
-        # Start iperf server processes
+        # Start iperf server processes. Each process starts once: minimega
+        # would start a command that is not once again in a VM whose miniccc
+        # reconnects, and that one would overwrite or append to the logs.
         logger.info("Starting iperf server processes...")
         for server in mapping.values():
-            self.mm.cc_filter(f"name={server.hostname}")  # e.g. "control-scada"
-
-            # Only need 1 server process for rperf
-            if self.metadata.get("use_rperf"):
-                server_cmd = f"{server.exe_path} --server"
-                # TODO: add_server_args from metadata for rperf
-                logger.info(f"server_cmd for '{server.hostname}': {server_cmd}")
-                self.mm.cc_background(server_cmd)
-            else:
-                # Start a server process for each client it will be communicating with
-                for client in server.clients.values():
-                    logger.info(
-                        f"starting iperf server process for client '{client.hostname}' on server '{server.hostname}'"
+            with utils.mm_cc_filtered(self.mm, f"name={server.hostname}"):
+                # Only need 1 server process for rperf
+                if self.metadata.get("use_rperf"):
+                    server_cmd = f"{server.exe_path} --server"
+                    # TODO: add_server_args from metadata for rperf
+                    logger.info(f"server_cmd for '{server.hostname}': {server_cmd}")
+                    utils.mm_cc_once(
+                        self.mm, server.hostname, server_cmd, background=True
                     )
+                else:
+                    # Start a server process for each client it will be communicating with
+                    for client in server.clients.values():
+                        logger.info(
+                            f"starting iperf server process for client '{client.hostname}' on server '{server.hostname}'"
+                        )
 
-                    idle_timeout = float(self.metadata.run_duration) + 5.0
-                    server_cmd = f"{server.exe_path} --server --one-off --bind {server.ip} --json --port {client.port} --idle-timeout {idle_timeout}"
+                        idle_timeout = float(self.metadata.run_duration) + 5.0
+                        server_cmd = f"{server.exe_path} --server --one-off --bind {server.ip} --json --port {client.port} --logfile {client.server_log_path} --idle-timeout {idle_timeout}"
 
-                    # Add user-configured arguments to the iperf server process for this client
-                    add_server_args = self._get_setting("add_server_args", client)
-                    if add_server_args is not None:
-                        server_cmd += f" {add_server_args.strip()}"
+                        # Add user-configured arguments to the iperf server process for this client
+                        add_server_args = self._get_setting("add_server_args", client)
+                        if add_server_args is not None:
+                            server_cmd += f" {add_server_args.strip()}"
 
-                    # debugging logs
-                    if node_info["os_types"][server.hostname] == "linux":
-                        server_cmd = f"bash -c '{server_cmd} 2>1 >/iperf_server-log_client-{client.hostname}_server-{server.hostname}.log'"
+                        # debugging logs
+                        if node_info["os_types"][server.hostname] == "linux":
+                            server_cmd = f"bash -c '{server_cmd} >/iperf_server-log_client-{client.hostname}_server-{server.hostname}.log 2>&1'"
 
-                    logger.info(f"server_cmd for {server.hostname}: {server_cmd}")
-                    retval = self.mm.cc_background(server_cmd)
-                    logger.info(
-                        f"return val from 'cc background' for server_cmd: {retval}"
-                    )
-
-        self.mm.clear_cc_filter()
+                        logger.info(f"server_cmd for {server.hostname}: {server_cmd}")
+                        retval = utils.mm_cc_once(
+                            self.mm, server.hostname, server_cmd, background=True
+                        )
+                        logger.info(
+                            f"return val from 'cc background' for server_cmd: {retval}"
+                        )
 
         # Wait for server processes to start user-configurable delay
         startup_delay = float(self.metadata.get("server_startup_delay", 5.0))
@@ -325,11 +326,13 @@ class Iperf(ComponentBase):
                         client_cmd += f" {add_client_args.strip()}"
 
                     # debugging logs
-                    client_cmd = f"bash -c '{client_cmd} 2>1 >/iperf_client-log_client-{client.hostname}_server-{server.hostname}.log'"
+                    client_cmd = f"bash -c '{client_cmd} >/iperf_client-log_client-{client.hostname}_server-{server.hostname}.log 2>&1'"
 
                 logger.info(f"client_cmd for '{client.hostname}': {client_cmd}")
-                self.mm.cc_filter(f"name={client.hostname}")
-                self.mm.cc_background(client_cmd)
+                with utils.mm_cc_filtered(self.mm, f"name={client.hostname}"):
+                    utils.mm_cc_once(
+                        self.mm, client.hostname, client_cmd, background=True
+                    )
 
         logger.info("finished starting all iperf processes")
         logger.info(f"Started user component: {self.name}")
@@ -342,10 +345,15 @@ class Iperf(ComponentBase):
         num_responses: int,
         timeout: float = 10.0,
     ) -> list:
+        # minimega tags a command with the namespace's prefix as it queues it,
+        # so the prefix is cleared as soon as this one is queued.
         self.mm.clear_cc_prefix()
-        self.mm.cc_filter(cc_filter)
         self.mm.cc_prefix(prefix)
-        self.mm.cc_exec_once(cmd)
+        try:
+            with utils.mm_cc_filtered(self.mm, cc_filter):
+                self.mm.cc_exec_once(cmd)
+        finally:
+            self.mm.clear_cc_prefix()
 
         # wait for responses count to reach count of VMs of the type
         utils.mm_wait_for_prefix(
@@ -358,7 +366,6 @@ class Iperf(ComponentBase):
                 raise RuntimeError(
                     f"failed to execute command '{cmd}' with filter '{cc_filter}'\nresponse: {response}"
                 )
-        self.mm.clear_cc_prefix()
 
         return responses
 

@@ -40,16 +40,8 @@ class PCAP(ComponentBase):
     def start(self):
         logger.info(f"Starting user component: {self.name}")
 
-        logger.info("clearing capture on minimega")
-        self.mm.clear_capture("pcap")
-
-        # Berkeley Packet Filter (BPF) syntax: https://biot.com/capstats/bpf.html
-        bpf_filter = self.metadata.get("filter")
-        if bpf_filter:
-            logger.info(f"applying pcap BPF filter: '{bpf_filter}'")
-            self.mm.capture_pcap_filter(
-                f"'{bpf_filter}'"
-            )  # single quotes are needed here
+        # No `clear capture pcap` here or in stop: minimega stops every capture
+        # in the namespace for it, netflow and other components' included.
 
         # https://wiki.wireshark.org/SnapLen
         snaplen = self.metadata.get("snaplen")
@@ -63,7 +55,16 @@ class PCAP(ComponentBase):
                 raise ValueError("snaplen must be a positive number")
 
             logger.info(f"applying pcap snaplen: {snaplen}")
-            self.mm.capture_pcap_snaplen(snaplen)
+
+        # Berkeley Packet Filter (BPF) syntax: https://biot.com/capstats/bpf.html
+        bpf_filter = self.metadata.get("filter")
+        if bpf_filter:
+            logger.info(f"applying pcap BPF filter: '{bpf_filter}'")
+
+        try:
+            filter_arg = utils.mm_capture_filter_arg(bpf_filter)
+        except ValueError as ex:
+            raise ValueError(f"pcap component '{self.name}': filter {ex}") from None
 
         # TODO: bridge (note: this is implemented in mm.py component)
         # bridge_path = Path(self.base_dir, "phenix.pcap")
@@ -71,14 +72,25 @@ class PCAP(ComponentBase):
         # self.mm.capture_pcap_bridge("phenix", str(bridge_path))
 
         logger.info(f"starting capture for {len(self.metadata.vms)} VMs")
-        for i, vm in enumerate(self.metadata.vms):
-            hostname, interface = self.get_host_and_iface(vm)
-            filepath = Path(self.base_dir, f"{hostname}-{interface}.pcap")
+        # minimega applies the namespace's snaplen and filter to every capture
+        # started while they are set, so set this component's values, or clear
+        # ones another component left (0 is minimega's default snaplen), and
+        # clear both again once the captures run.
+        with utils.run_cleanups(
+            lambda: self.mm.capture_pcap_filter(utils.MM_NO_CAPTURE_FILTER),
+            lambda: self.mm.capture_pcap_snaplen(0),
+        ):
+            self.mm.capture_pcap_snaplen(snaplen or 0)
+            self.mm.capture_pcap_filter(filter_arg)
 
-            logger.info(
-                f"starting capture on '{hostname}' interface '{interface}' to '{filepath}' ({i + 1} of {len(self.metadata.vms)})"
-            )
-            self.mm.capture_pcap_vm(hostname, interface, str(filepath))
+            for i, vm in enumerate(self.metadata.vms):
+                hostname, interface = self.get_host_and_iface(vm)
+                filepath = Path(self.base_dir, f"{hostname}-{interface}.pcap")
+
+                logger.info(
+                    f"starting capture on '{hostname}' interface '{interface}' to '{filepath}' ({i + 1} of {len(self.metadata.vms)})"
+                )
+                self.mm.capture_pcap_vm(hostname, interface, str(filepath))
 
         logger.info(f"Started user component: {self.name}")
 
@@ -86,6 +98,7 @@ class PCAP(ComponentBase):
         logger.info(f"Stopping user component: {self.name}")
 
         pcap_paths = []
+        failures = []
 
         logger.info(f"stopping captures for {len(self.metadata.vms)} VMs")
         for i, vm in enumerate(self.metadata.vms):
@@ -94,13 +107,20 @@ class PCAP(ComponentBase):
             logger.info(
                 f"stopping PCAP capture on interface {interface} for VM {hostname} ({i + 1} of {len(self.metadata.vms)})"
             )
-            self.mm.capture_pcap_delete_vm(hostname)
+            # Without the interface, minimega stops every capture on the VM
+            # and fails the next entry for the same VM with "vm not found".
+            # Nothing else stops a capture this misses, so stop the rest first.
+            try:
+                self.mm.capture_pcap_delete_vm(hostname, interface)
+            except Exception as ex:
+                failures.append(f"{hostname} interface {interface}: {ex}")
+                continue
 
             pcap_path = Path(self.base_dir, f"{hostname}-{interface}.pcap")
             pcap_paths.append(pcap_path)
 
-        logger.info("clearing capture on minimega")
-        self.mm.clear_capture("pcap")
+        if failures:
+            raise RuntimeError(f"failed to stop PCAP captures: {'; '.join(failures)}")
 
         logger.info(f"verifying {len(pcap_paths)} PCAP files")
         pcap_metadata = {}
@@ -152,11 +172,12 @@ class PCAP(ComponentBase):
                 # special processing for TCP flood packets
                 dos_targets = []
                 for comp in self.extract_app("scorch").metadata.components:
-                    if (
-                        comp.type == "disruption"
-                        and comp.metadata.current_disruption
-                        in ["dos", "cyber_physical"]
-                    ):
+                    # phenix core defaults an omitted or empty type to the name
+                    ctype = comp.get("type") or comp.name
+                    if ctype == "disruption" and comp.metadata.current_disruption in [
+                        "dos",
+                        "cyber_physical",
+                    ]:
                         dos_targets = [t.hostname for t in comp.metadata.dos.targets]
                         break
 
@@ -191,7 +212,7 @@ class PCAP(ComponentBase):
                         frag_path = t_path.with_stem(f"{t_path.stem}_fragmented")
                         # give tshark 2 minutes to complete
                         utils.run_command(
-                            f'tshark -r {t_path} -w {frag_path} -o ip.defragment:FALSE -o tcp.desegment_tcp_streams:FALSE -n -Y "ip.frag_offset > 0"',
+                            _tshark_split(t_path, frag_path, "ip.frag_offset > 0"),
                             timeout=120.0,
                         )
                         fragmented.append(frag_path)
@@ -199,7 +220,7 @@ class PCAP(ComponentBase):
                         nd_path = t_path.with_stem(f"{t_path.stem}_no_dos_fragments")
                         # give tshark 2 minutes to complete
                         utils.run_command(
-                            f'tshark -r {t_path} -w {nd_path} -o ip.defragment:FALSE -o tcp.desegment_tcp_streams:FALSE -n -Y "not (ip.frag_offset > 0)"',
+                            _tshark_split(t_path, nd_path, "not (ip.frag_offset > 0)"),
                             timeout=120.0,
                         )
                         non_dos.append(nd_path)
@@ -253,7 +274,11 @@ class PCAP(ComponentBase):
                 logger.info(
                     f"running PCAP --> JSON conversion (source={pcap_path.name}, dest={json_path.name})"
                 )
-                utils.run_command(f"tshark -r {pcap_path} -T ek > {json_path}")
+                code = utils.pcap_to_jsonl(pcap_path, json_path)
+                if code:
+                    raise RuntimeError(
+                        f"tshark exited {code} converting {pcap_path} to JSON"
+                    )
         else:
             logger.info("PCAP --> JSON conversion disabled")
 
@@ -268,9 +293,7 @@ class PCAP(ComponentBase):
         if overwriting:
             merged_path = merged_path.with_stem("temp_merged")
 
-        mergecap_cmd = f"mergecap -w {merged_path}"
-        for pcap_path in pcap_paths:
-            mergecap_cmd += f" {pcap_path}"
+        mergecap_cmd = ["mergecap", "-w", str(merged_path), *map(str, pcap_paths)]
 
         utils.run_command(mergecap_cmd, timeout=60.0)  # this shouldn't take long
 
@@ -287,7 +310,7 @@ class PCAP(ComponentBase):
 
     def _dedupe_pcap(self, pcap_path: Path) -> None:
         dd_path = Path(self.base_dir, "deduped.pcap")
-        utils.run_command(f"editcap -d {pcap_path} {dd_path}", timeout=60.0)
+        utils.run_command(["editcap", "-d", str(pcap_path), str(dd_path)], timeout=60.0)
 
         if not dd_path.is_file():
             raise RuntimeError(
@@ -295,6 +318,29 @@ class PCAP(ComponentBase):
             )
 
         dd_path.replace(pcap_path)  # overwrite merged.pcap with deduped.pcap
+
+
+def _tshark_split(src: Path, dst: Path, display_filter: str) -> list[str]:
+    """tshark's argument vector to write the packets of ``src`` that
+    ``display_filter`` matches, without reassembly, to ``dst``.
+
+    An argument vector, not a shell command, because the paths hold the
+    component's name, which comes from the scenario.
+    """
+    return [
+        "tshark",
+        "-r",
+        str(src),
+        "-w",
+        str(dst),
+        "-o",
+        "ip.defragment:FALSE",
+        "-o",
+        "tcp.desegment_tcp_streams:FALSE",
+        "-n",
+        "-Y",
+        display_filter,
+    ]
 
 
 def main():

@@ -1,4 +1,5 @@
 from phenix_apps.apps.scorch import ComponentBase
+from phenix_apps.common import settings, utils
 from phenix_apps.common.logger import logger
 
 
@@ -32,20 +33,21 @@ class Ettercap(ComponentBase):
                 logger.error(f"missing targets for VM {hostname}")
                 continue
 
-            logger.info(f"ensuring interface {iface} is up in VM {hostname}")
+            with utils.mm_cc_filtered(mm, f"name={hostname}"):
+                logger.info(f"ensuring interface {iface} is up in VM {hostname}")
 
-            cmd = f"ip link set {iface} up"
+                utils.mm_cc_once(mm, hostname, f"ip link set {iface} up")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec(cmd)
+                logger.info(
+                    f"starting ettercap using {method} against {targets} in VM {hostname}"
+                )
 
-            logger.info(
-                f"starting ettercap using {method} against {targets} in VM {hostname}"
-            )
-
-            cmd = f"ettercap -Tq -i {iface} -M {method} {targets}"
-
-            mm.cc_background(cmd)
+                utils.mm_cc_once(
+                    mm,
+                    hostname,
+                    f"ettercap -Tq -i {iface} -M {method} {targets}",
+                    background=True,
+                )
 
         logger.info(f"Started user component: {self.name}")
 
@@ -55,6 +57,7 @@ class Ettercap(ComponentBase):
         vms = self.metadata.get("vms", None)
 
         mm = self.mm_init()
+        failures = []
 
         for vm in vms:
             hostname = vm.get("hostname", None)
@@ -64,8 +67,19 @@ class Ettercap(ComponentBase):
 
             logger.info(f"stopping ettercap in VM {hostname}")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec("pkill ettercap")
+            with (
+                utils.record_failure(failures, hostname),
+                utils.mm_cc_filtered(mm, f"name={hostname}"),
+            ):
+                utils.mm_cc_once(
+                    mm,
+                    hostname,
+                    "pkill ettercap",
+                    grace=settings.CC_TEARDOWN_GRACE,
+                )
+
+        if failures:
+            raise RuntimeError(f"could not stop ettercap in {'; '.join(failures)}")
 
         logger.info(f"Stopped user component: {self.name}")
 

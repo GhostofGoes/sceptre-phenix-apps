@@ -1,3 +1,4 @@
+import contextlib
 import difflib
 import io
 import json
@@ -6,6 +7,7 @@ import re
 import signal
 import sys
 import time
+import weakref
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
@@ -130,6 +132,31 @@ def parse_metadata[M: BaseModel](
     return config
 
 
+class StageCanceled(BaseException):
+    """Raised in a foreground stage when phenix cancels it with SIGTERM.
+
+    A BaseException, like KeyboardInterrupt, so that ``except Exception``
+    blocks do not swallow it, while ``finally`` blocks, such as the ones that
+    clear the namespace's cc filter, still run before phenix kills the stage
+    10 seconds later.
+    """
+
+
+# Every minimega connection ComponentBase.mm_init opened, for _cancel_stage.
+_CONNECTIONS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _cancel_stage(signum, _frame):
+    # The signal can land inside a minimega request and leave its reply unread
+    # on the connection, after which each call, the finally blocks' included,
+    # would read the reply to the call before it. Reconnect each one first.
+    for mm in list(_CONNECTIONS):
+        with contextlib.suppress(OSError):
+            utils.mm_reconnect(mm)
+
+    raise StageCanceled(f"stage canceled by signal {signum}")
+
+
 class ComponentBase:
     """
     Base class for Scorch components.
@@ -138,6 +165,8 @@ class ComponentBase:
     1. Use `phenix_apps.common.logger` for logging.
     2. Raise exceptions (e.g. `ValueError`, `RuntimeError`) instead of calling `sys.exit()` for fatal errors.
        This ensures that the `execute_stage` method can catch the error, write the JSON status file, and log the traceback.
+    3. Release what a stage holds, such as a cc filter, in `finally` blocks: when phenix cancels a stage that is not a
+       background configure or start, SIGTERM raises `StageCanceled` wherever the stage is.
     """
 
     valid_stages = ("configure", "start", "stop", "cleanup")
@@ -221,11 +250,13 @@ class ComponentBase:
         self._mm: minimega.minimega | None = None  # minimega instance
         self._es: Elasticsearch | None = None  # Elasticsearch instance
 
-        def signal_handler(_, __):
-            pass
-
-        # handle signals for backgrounded components
-        signal.signal(signal.SIGTERM, signal_handler)
+        # phenix stops a background configure or start stage, and cancels any
+        # other, with SIGTERM. A background stage ignores it unless the
+        # component installs its own handler.
+        if self.stage in ("configure", "start") and self.is_background():
+            signal.signal(signal.SIGTERM, lambda *_: None)
+        else:
+            signal.signal(signal.SIGTERM, _cancel_stage)
 
     def execute_stage(self) -> None:
         """
@@ -286,7 +317,7 @@ class ComponentBase:
                         self.metadata_model, self.metadata, self.name
                     )
                 out = stages_dict[self.stage]() or ""
-        except Exception as ex:
+        except (Exception, StageCanceled) as ex:
             error_occurred = True
             logger.exception(
                 f"Error executing stage '{self.stage}' for component '{self.name}'"
@@ -369,6 +400,7 @@ class ComponentBase:
         sys.stdout.close()
         sys.stdout = saved_stdout
 
+        _CONNECTIONS.add(mm)
         return mm
 
     @property
@@ -417,6 +449,21 @@ class ComponentBase:
 
         # name might be an empty string...
         return name if name else str(self.run)
+
+    def is_background(self) -> bool:
+        """Whether the scenario runs this component's configure and start
+        stages in the background."""
+        for app in self.experiment.spec.scenario.apps:
+            if app.name != "scorch":
+                continue
+
+            for cmp in (app.get("metadata") or {}).get("components") or []:
+                # phenix core defaults an omitted or empty type to the name
+                ctype = cmp.get("type") or cmp.name
+                if cmp.name == self.name and ctype == self.type:
+                    return bool(cmp.get("background"))
+
+        return False
 
     def extract_app(self, name: str) -> Box | None:
         for app in self.experiment.spec.scenario.apps:
@@ -538,14 +585,15 @@ class ComponentBase:
         """
         Run and wait for command, and if exit code is non-zero, print error and exit.
         """
-        resp = utils.mm_exec_wait(
-            mm=self.mm,
-            vm=vm,
-            cmd=cmd,
-            timeout=timeout,
-            poll_rate=poll_rate,
-            debug=debug,
-        )
+        with utils.mm_cc_filtered(self.mm):
+            resp = utils.mm_exec_wait(
+                mm=self.mm,
+                vm=vm,
+                cmd=cmd,
+                timeout=timeout,
+                poll_rate=poll_rate,
+                debug=debug,
+            )
 
         if resp["exitcode"] != 0:
             raise RuntimeError(

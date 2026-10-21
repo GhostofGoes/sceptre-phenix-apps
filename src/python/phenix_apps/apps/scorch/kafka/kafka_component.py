@@ -1,12 +1,17 @@
 import json
 import os
-import shlex
 import subprocess
+import sys
+import time
 import uuid
 from pathlib import Path
 
 from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.common.logger import logger
+
+# Seconds to wait before checking that the listener did not exit at once, e.g.
+# on a missing module or an unreachable broker.
+LISTENER_STARTUP_GRACE = 2.0
 
 
 class Kafka(ComponentBase):
@@ -61,32 +66,54 @@ class Kafka(ComponentBase):
         topics_str = json.dumps(topics)
 
         # pass the inputs to the python file (which we execute as a
-        # separate process)
+        # separate process). It needs this interpreter's kafka-python, which
+        # the python3 on PATH may lack, e.g. when phenix-apps is in a venv.
         executable = str(Path(Path(__file__).parent, "kafka_listener.py"))
-        arguments = (
-            f"python3 {executable} {csv_bool} '{self.path}' "
-            f"{kafka_ips_str} '{topics_str}' "
-            f"'{self.exp_name}' '{wait_duration_seconds}'"
-        )
-        command = shlex.split(arguments)
+        command = [
+            sys.executable,
+            executable,
+            str(csv_bool),
+            self.path,
+            kafka_ips_str,
+            topics_str,
+            self.exp_name,
+            str(wait_duration_seconds),
+        ]
+
+        # The listener outlives this process, so it logs to a file.
+        log_path = Path(output_dir, "kafka_listener.log")
+        logger.info(f"Kafka listener log: {log_path}")
 
         try:
-            response = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+            with log_path.open("ab") as log:
+                response = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=True,
+                )
+        except Exception as e:
+            raise RuntimeError(f"Error running listener executable. See: {e}") from e
+
+        try:
+            time.sleep(LISTENER_STARTUP_GRACE)
+        except BaseException:
+            # A canceled stage has written no PID file for cleanup to find the
+            # listener by, so it must not leave one running.
+            response.kill()
+            raise
+
+        status = response.poll()
+        if status is not None:
+            raise RuntimeError(
+                f"kafka listener exited with status {status} right after starting; "
+                f"see {log_path}"
             )
 
-            # write PID to a file so that it can be found
-            # and killed later
-            self._create_pid_file(response.pid)
-
-            # prevents hang
-            response.poll()
-        except Exception as e:
-            logger.error(f"Error running listener executable. See: {e}")
+        # write PID to a file so that it can be found
+        # and killed later
+        self._create_pid_file(response.pid)
 
     def _create_pid_file(self, pid):
         # writes PID to unique .pid file under /tmp directory

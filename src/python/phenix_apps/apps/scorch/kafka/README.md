@@ -1,6 +1,8 @@
 # phenix (kafka) Component
 Collects and filters desired Kafka data into CSV/JSON format, so that Kafka data can be easily used by programs such as Excel. The output directory for the data is listed in the phenix log when the scorch component starts.
 This component is called in the configure and cleanup stages.
+Configure starts a detached listener with the component's own Python interpreter, which logs to
+`kafka_listener.log` in the output directory; configure fails if the listener exits within two seconds.
 
 ```
 type: kafka

@@ -56,6 +56,11 @@ class Stage:
 
         return self.app.extract_nodes_label(label)
 
+    def has_ignition(self) -> bool:
+        """Whether an Ignition host is present, by label or by metadata.type."""
+
+        return bool(self.labelled("ignition") or self.hosts("ignition"))
+
     def host_dir(self, hostname: str) -> Path:
         """A host's output directory, created."""
 

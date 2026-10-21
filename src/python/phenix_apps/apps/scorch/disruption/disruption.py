@@ -1,10 +1,16 @@
 import timeit
+from datetime import timedelta
 from pathlib import Path
 from time import sleep
 
 from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
+
+# Seconds the DoS script gets after its attack to write results. A dos attack
+# that would end less than this (plus a second) before run_duration is
+# shortened.
+DOS_WRAP_UP = 60.0
 
 # TODO: user-configurable script path + script arguments for dos
 # TODO: allow dos attacks to be executed on Windows
@@ -30,6 +36,29 @@ class Disruption(ComponentBase):
         utils.mm_kill_process(
             self.mm, f"name={opc_host}", "python.exe", os_type="windows"
         )
+
+    def _dos_run_for(
+        self, run_duration: float, start_delay: float, attack_duration: float
+    ) -> float:
+        """The DoS script's --run-for: attack_duration, shortened so that the
+        start delay, the attack and DOS_WRAP_UP end a second before
+        run_duration."""
+        fits = run_duration - DOS_WRAP_UP - start_delay - 1.0
+        if fits <= 0:
+            raise ValueError(
+                f"disruption component '{self.name}': run_duration {run_duration} "
+                f"leaves no time for a dos attack after its start_delay {start_delay} "
+                f"and the script's {DOS_WRAP_UP} s wrap-up"
+            )
+
+        if attack_duration > fits:
+            logger.warning(
+                f"shortening the dos attack_duration {attack_duration} to {fits} "
+                f"to fit run_duration {run_duration}"
+            )
+            return fits
+
+        return attack_duration
 
     def _build_dos_cmd(self, start_delay: float, dos_run_duration: float) -> str:
         t_ips = []
@@ -127,13 +156,14 @@ class Disruption(ComponentBase):
             for interface in a_node.network.interfaces:
                 if interface.name not in [a_iface, "MGMT", "mgmt"]:
                     logger.info(f"disabling interface {interface.name} on {a_host}")
-                    utils.mm_exec_wait(
-                        self.mm,
-                        a_host,
-                        f"ip link set {interface.name} down",
-                        timeout=10.0,
-                        poll_rate=0.5,
-                    )
+                    with utils.mm_cc_filtered(self.mm):
+                        utils.mm_exec_wait(
+                            self.mm,
+                            a_host,
+                            f"ip link set {interface.name} down",
+                            timeout=10.0,
+                            poll_rate=0.5,
+                        )
 
         logger.info(f"Configured user component: {self.name}")
 
@@ -148,15 +178,8 @@ class Disruption(ComponentBase):
         # record disruption start time
         base_start = utils.utc_now()
 
-        # Round up to nearest second
-        if base_start.second >= 59:
-            rounded_start = base_start.replace(
-                minute=base_start.minute + 1, second=0, microsecond=0
-            )
-        else:
-            rounded_start = base_start.replace(
-                second=base_start.second + 1, microsecond=0
-            )
+        # Round up to the next whole second.
+        rounded_start = base_start.replace(microsecond=0) + timedelta(seconds=1)
 
         # wait until we've reached the rounded up time
         sleep((rounded_start - base_start).total_seconds())
@@ -178,16 +201,13 @@ class Disruption(ComponentBase):
             start_delay = float(self.metadata.dos.start_delay)
             attack_duration = float(self.metadata.dos.attack_duration)
 
-            timeout = attack_duration + start_delay + 5.0  # type: float
-            tmp_run_duration = run_duration - 60.0
-            # ensure timeout doesn't exceed experiment duration
-            if timeout > tmp_run_duration:
-                timeout = tmp_run_duration - start_delay - 1.0
-                timeout = float(abs(timeout))
-            else:
-                timeout = attack_duration
+            run_for = self._dos_run_for(run_duration, start_delay, attack_duration)
 
-            cmd = self._build_dos_cmd(start_delay, timeout)
+            cmd = self._build_dos_cmd(start_delay, run_for)
+
+            # The script sleeps --wait-for, attacks for --run-for, then writes
+            # its results, so wait for all three.
+            timeout = start_delay + run_for + DOS_WRAP_UP
 
             a_host = self.metadata.dos.attacker.hostname
             logger.info(f"Running DoS command on {a_host}: {cmd} (timeout={timeout})")
@@ -238,14 +258,9 @@ class Disruption(ComponentBase):
             dos_start_delay = float(self.metadata.dos.start_delay)
             dos_attack_duration = float(self.metadata.dos.attack_duration)
 
-            # make sure total dos attack run time does not exceed total run_duration
-            dos_run_duration = dos_attack_duration + dos_start_delay + 5.0
-            tmp_run_duration = run_duration - 60.0
-            if dos_run_duration > tmp_run_duration:
-                dos_run_duration = tmp_run_duration - dos_start_delay - 1.0
-                dos_run_duration = float(abs(dos_run_duration))
-            else:
-                dos_run_duration = dos_attack_duration
+            dos_run_duration = self._dos_run_for(
+                run_duration, dos_start_delay, dos_attack_duration
+            )
 
             # Kick off DoS process, have it sleep for number of seconds that puts it between line outage and load shedding
             # delay: 6.0 = 2.0 + 4.0 + 60.0 = 66.0
@@ -256,9 +271,11 @@ class Disruption(ComponentBase):
                 f"Kicking off DoS script in background with start delay of {dos_start_delay}"
             )
             dos_cmd = self._build_dos_cmd(dos_start_delay, dos_run_duration)
-            self.mm.cc_filter(f"name={self.metadata.dos.attacker.hostname}")
-            self.mm.cc_background(dos_cmd)
-            self.mm.clear_cc_filter()
+            attacker = self.metadata.dos.attacker.hostname
+            # Once: minimega resends any other command to a client that
+            # reconnects, which would rerun the attack outside its window.
+            with utils.mm_cc_filtered(self.mm, f"name={attacker}"):
+                utils.mm_cc_once(self.mm, attacker, dos_cmd, background=True)
 
             # Run physical disruption
             # open breaker for generator 1
@@ -333,8 +350,6 @@ class Disruption(ComponentBase):
                         f"failed disruption stage '{stage['name']}': {stage['status']}"
                     )
 
-        self.mm.clear_cc_filter()
-
         logger.info(f"Started user component: {self.name}")
 
     def cleanup(self):
@@ -346,20 +361,22 @@ class Disruption(ComponentBase):
 
             # delete result file
             a_host = self.metadata.dos.attacker.hostname
-            logger.info(f"deleting attacker results (vm={a_host})")
-            self.mm.cc_filter(f"name={a_host}")
-            self.mm.cc_exec_once(f"rm -f {self.metadata.dos.attacker.results_path}")
-
-            # reset attacker interfaces
             a_iface = self.metadata.dos.attacker.get("interface", "eth0")
             a_node = self.extract_node(a_host)
-            for interface in a_node.network.interfaces:
-                if interface.name not in [a_iface, "MGMT", "mgmt"]:
-                    logger.info(f"bringing up interface {interface.name} on {a_host}")
-                    self.mm.cc_exec_once(f"ip link set {interface.name} up")
+
+            with utils.mm_cc_filtered(self.mm, f"name={a_host}"):
+                logger.info(f"deleting attacker results (vm={a_host})")
+                self.mm.cc_exec_once(f"rm -f {self.metadata.dos.attacker.results_path}")
+
+                # reset attacker interfaces
+                for interface in a_node.network.interfaces:
+                    if interface.name not in [a_iface, "MGMT", "mgmt"]:
+                        logger.info(
+                            f"bringing up interface {interface.name} on {a_host}"
+                        )
+                        self.mm.cc_exec_once(f"ip link set {interface.name} up")
 
             sleep(1.0)
-            self.mm.clear_cc_filter()
 
         if self.metadata.current_disruption in ["physical", "cyber_physical"]:
             self._kill_phys_process()
@@ -380,7 +397,6 @@ class Disruption(ComponentBase):
             )
 
             sleep(1.0)
-            self.mm.clear_cc_filter()
 
         logger.info(f"Cleaned up user component: {self.name}")
 

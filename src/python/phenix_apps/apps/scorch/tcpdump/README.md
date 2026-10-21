@@ -46,7 +46,7 @@ The `filter` and `options` VM options are optional.
 
 The `tcpdump` component code automatically adds the `-i <iface>`, `-U`, and `-w <path>` options to the command before being executed.
 
-The `convertToJSON` option is important if Filebeat is going to be used to process the results of the traffic capture to send to Elastic. By default it is disabled since it can take a while to complete.
+The `convertToJSON` option is important if Filebeat is going to be used to process the results of the traffic capture to send to Elastic. By default it is disabled since it can take a while to complete. The stop stage stops and copies every VM's capture even when one VM has no miniccc client, then fails naming each VM it could not reach; it waits `PHENIX_CC_TEARDOWN_GRACE` seconds (default 20) at most for each client, so that one VM without a client cannot use up the time phenix gives a canceled run's teardown. The conversion runs with tshark on the phenix host once every VM's capture has been stopped and copied; if tshark is missing or fails, the stop stage fails naming each capture, and no partial `.pcap.jsonl` is left.
 
 The `filebeat.inputs` section above can be blindly copied into user's own config and used as-is, or users can choose to change target field names if the ones used above aren't suitable.
 

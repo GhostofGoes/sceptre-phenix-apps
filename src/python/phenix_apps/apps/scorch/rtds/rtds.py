@@ -286,7 +286,8 @@ class RTDS(ComponentBase):
         if self.metadata.get("csv_files"):
             csv_path = self.metadata.csv_files.get("path", "/root/rtds_data")
             logger.info(f"Deleting provider CSV files (path={csv_path})")
-            utils.mm_exec_wait(self.mm, host, f"rm -rf {csv_path}")
+            with utils.mm_cc_filtered(self.mm):
+                utils.mm_exec_wait(self.mm, host, f"rm -rf {csv_path}")
 
         # Delete log files
         logger.info("Deleting provider log files")

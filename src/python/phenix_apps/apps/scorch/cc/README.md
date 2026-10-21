@@ -46,7 +46,10 @@ metadata:
   - `recv`: receive a file (VM -> Host)
 - Stage-level command types
   - `reset`: reset miniccc state, by clearing filter and deleting all commands and responses. **WARNING**: THIS WILL INTERFERE WITH OPERATION OF MANY COMPONENTS! Reset should only be used at the start or end of a run or a loop (use with special care in loops!).
-  - `exec`: execute a command (`cc exec`). Currently the only supported arguments for this stage-level command are `once` and `filter_`
+  - `exec`: execute a command (`cc exec`). Currently the only supported arguments for this stage-level command are `once` and `filter`, a minimega cc filter such as `hostname=foo` or `tag=foo:bar`. The filter is cleared once the command is queued, so it does not carry over to later cc commands in the namespace.
+
+Every cc filter the component sets, including the one each VM-specific command
+uses to target its VM, is cleared when that command is done.
 
 ## Notes on the `exec` and `background` Type
 

@@ -22,15 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: Test suite (128 tests), two of them characterization tests over both stages and all 310 infrastructure/device-type/protocol combinations, plus `apps/sceptre/README.md`.
 - **SCORCH**: Pydantic metadata models for components (#160).
 - **SCORCH**: `phenix-scorch-validate` checks component metadata.
+- **Caldera App**: Server Firefox skips its Terms of Use dialog.
 
 ### Changed
 - **OT-sim App**: DNP3 address assignment is a module function (`protocols.dnp3.assign_addresses`)
 - **Build System**: `Mako>=1.3.10`, `requests>=2.32.4` (security advisories).
+- **Build System**: Require `minimega>=3.3.0` for per-interface capture stops.
+- **OT-sim App**: Rename client `.connected` tags to `<protocol>-client-<host>.connected` (breaking).
+- **OT-sim/Wind Turbine Apps**: Fail on half-configured CPU API TLS (breaking).
+- **OT-sim/Wind Turbine Apps**: Host `cpu-module` must keep app-level TLS (breaking).
+- **OT-sim App**: Analog Modbus points default to two-register `int32` (breaking).
+- **mgmt_tap App**: Name host taps `mgmt_<hash>`; failed creates fail (breaking).
+- **mgmt_tap App**: Fail a cleanup that leaves a tap (breaking).
+- **Mirror App**: Exit 1 on failure or unknown stages (breaking).
+- **OT-sim App**: Reject unknown `fep` `downstream` protocols (breaking).
+- **SCORCH mm/tcpdump**: Fail on tshark errors, after every stop (breaking).
+- **SCORCH ettercap/trafficgen/tcpdump**: Teardown waits `PHENIX_CC_TEARDOWN_GRACE`, 20 s, per client (breaking).
 - **SCEPTRE App**: Register numbering state is per `FieldDeviceConfig` instead of class-level mutable state on `Register`; numbering is no longer order-dependent across configs and the test suite runs safely in parallel. Output is unchanged.
 - **SCEPTRE App**: `configure()` and `pre_start()` are stage classes, `ConfigureStage` and `PreStart`, sharing pre-start state through `PreStartState`.
 - **SCEPTRE App**: The device-type table is `configs/infrastructures.yaml`; adding a device type needs no code change.
 - **SCEPTRE App**: Injections are declared with `Sceptre.inject()`, and all of them in the configure stage.
 - **Common**: `utils.abs_path()` always returns a `Path`.
+- **Common**: `mm_compute_cmd` raises on socket failures, even with `ignore_error` (breaking).
 - **SCEPTRE App**: Type annotations on every app function, `Final` on module constants.
 - **SCEPTRE App**: Validation failures raise `error.AppError` instead of calling `sys.exit(1)`, matching the app contract.
 - **SCEPTRE App**: `metadata.simulator` matches case-insensitively in both stages, as validation already did; a miscased name used to silently get the default config.
@@ -52,11 +65,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: A `power-transmission` inverter raised `TypeError`, passing `infrastructure` twice into `Device()`.
 - **SCEPTRE App**: A `fep` without a mgmt interface raised `UnboundLocalError`, or reused the previous fep's endpoints.
 - **SCEPTRE App**: A historian on a subnet with no OPC server was configured with an unrelated OPC's tag list and no address to collect from. It now gets no tags and a warning naming the subnet.
+- **HELICS App**: Track sub-brokers by resolved `ip:port`, fixing pre-start `KeyError`.
+- **OT-sim App**: Fail pre-start on broker script clash with helics.
+- **SCEPTRE App**: Close Modbus RTU client blocks as `</modbus-client>`.
+- **SCEPTRE App**: Detect Ignition hosts by label or type everywhere.
+- **Caldera App**: Allow server interfaces without a `gateway`.
+- **OT-sim App**: Serve `fep` points with their served protocol's settings.
+- **OT-sim App**: Clients poll exactly what a `fep` serves.
+- **OT-sim App**: Inject only configured CPU API TLS files.
+- **OT-sim App**: Raise `AppError`, naming the host, for missing `helics.broker`.
+- **OT-sim App**: Name `fep` Modbus clients uniquely, as `modbus-client-<upstream host>`.
+- **SCORCH collector**: Tolerate a null `loop`.
+- **SCORCH collector**: Collect per type from its own loop's components.
+- **SCORCH collector**: Read Linux miniccc logs from `/var/log/miniccc.log`, then `/miniccc.log`.
+- **SCORCH collector**: Accept components that omit `type`.
+- **SCORCH pcap**: Stop only its own captures; needs minimega 3.3.0.
+- **SCORCH pcap**: Set or clear the filter before capturing.
+- **SCORCH mm**: Quote multi-word filters; reset filter and `snaplen` afterwards.
+- **SCORCH art**: Fail before running when a VM lacks `goart`.
+- **SCORCH art**: Honor `goartPath`, `outputPath` and `execWaitSeconds` options.
+- **SCORCH disruption**: Wait for the `dos` `start_delay`, attack and results.
+- **SCORCH trafficgen**: Read malware `rate` and `probability` from `malwareClient`.
+- **SCORCH ssh**: Fail the stage on failed commands or fetches.
+- **SCORCH erspan**: Fail configure at the first failing `ovs-vsctl` command.
+- **SCORCH erspan**: Add and remove only its `m0` OVS mirror.
+- **SCORCH hoststats**: Fail start without `background: true` instead of hanging.
+- **SCORCH kafka**: Run listener with component's Python; detect failed starts.
+- **Apps**: Dry runs log JSON to stderr when `PHENIX_LOG_FILE=stderr`.
+- **Mirror App**: `cleanup` tolerates missing status.
+- **Mirror App**: Pass unknown top-level experiment fields through unchanged.
+- **single-node Scheduler**: Schedule unscheduled VMs on the first cluster host.
+- **mgmt_tap App**: Give experiments sharing a name prefix separate taps.
+- **SCORCH tcpdump**: Clear the cc filter after start and stop.
+- **SCORCH iperf**: Servers write the JSON results that stop collects.
+- **SCORCH iperf**: Redirect stderr with `2>&1`, not `2>1`.
+- **SCORCH vmstats**: Remove the `vmstat=1` VM tag at stop.
+- **SCORCH vmstats**: Clear the cc filter even when `pkill` fails.
+- **SCORCH cc**: Clear `exec` cc filters after each command.
+- **SCORCH hoststats**: Flush promptly on SIGTERM; fail on poll errors.
+- **SCORCH snort**: Collect and delete every `snort.log.<time>` packet log.
+- **SCORCH disruption**: Round start times across hour boundaries without `ValueError`.
+- **SCORCH**: `mm_kill_process`, `mm_delete_file` and `ComponentBase` checks clear cc filters.
+- **SCORCH snort**: Clear the cc filter after each stage's commands.
+- **SCORCH ettercap**: Clear each VM's cc filter after its commands.
+- **SCORCH trafficgen**: Clear the cc filter after each script command.
+- **SCORCH iperf**: Clear the cc filter after each queued command.
+- **SCORCH disruption**: Clear the attacker's cc filter after each command.
+- **SCORCH opcexport**: Clear the OPC host's cc filter after commands.
+- **SCORCH rtds/providerdata**: Clear the provider's cc filter after each check.
+- **SCORCH art**: Clear the cc filter after each goart command.
+- **SCORCH caldera**: Clear the server's cc filter after each stage.
+- **Scale App**: Clear the cc filter after each post-start send.
+- **OT-sim App**: Treat a null app-level `cpu-module.api-endpoint` as no default.
+- **OT-sim App**: A null `fep` `downstream` means `dnp3`.
+- **OT-sim App**: Serve each point a `fep` polls once.
+- **OT-sim App**: Accept a null `modbus` setting on analog variables.
+- **OT-sim App**: Combine host and app-level `logs` without crashing.
+- **OT-sim App**: Treat a null `cpu-module` or `cpu-module.api` as unset.
+- **Wind Turbine App**: Inject the CPU API TLS files.
+- **mgmt_tap App**: Create taps on hosts sharing the headnode's prefix.
+- **mgmt_tap App**: Recognize the headnode under custom hostname suffixes.
+- **mgmt_tap App**: Leave host taps alone in dry runs.
+- **SCORCH mm**: Reset capture settings after a rejected `snaplen`.
+- **SCORCH mm**: `stop_capture` stops only the named VM interface.
+- **SCORCH pcap**: Reset `snaplen` after starting captures.
+- **SCORCH pcap**: Stop every capture before reporting a failed one.
+- **Common**: Escape backslashes and quotes in capture filters.
+- **SCORCH opcexport**: Delete the Windows log with `del`, not `rm`.
+- **Common**: Windows file deletes no longer hang multi-host namespaces.
+- **SCORCH disruption**: Shorten, never lengthen, a `dos` attack to fit.
+- **SCORCH art**: Pass each `testName`, `env` and `inputs` value whole.
+- **SCORCH art**: Report goart failures; `abortOnError` fails the stage.
+- **SCORCH vmstats**: Delete `/vmstat.out` by name; always remove the tag.
+- **SCORCH**: Queue snort, ettercap, trafficgen, tcpdump and iperf commands once.
+- **SCORCH snort**: Wait for Snort to exit before copying logs.
+- **SCORCH iperf**: Clear the cc prefix right after queuing.
+- **SCORCH**: Canceled foreground stages run `finally` blocks on fresh connections.
+- **SCORCH pcap**: Find a `disruption` component that omits its `type`.
+- **single-node Scheduler**: Skip external nodes; fail without cluster hosts.
+- **SCORCH erspan**: Clean up its mirror by output port.
+- **SCORCH mm**: Convert captures only once minimega stops writing them.
+- **SCORCH ettercap/trafficgen/tcpdump**: Teardown reaches every VM when one fails.
+- **SCORCH pcap/mm/vmstats**: Run every reset; keep the original error.
+- **SCORCH disruption/vmstats**: Launch the DoS and vmstat once.
+- **SCORCH hoststats**: Honor a SIGTERM that arrives before start runs.
+- **SCORCH kafka**: A canceled configure kills its just-started listener.
 
 ### Security
 - **Common**: New `validate_hostname()` (phenix v2026.10.02 rules) and `safe_join()` guard hostnames and paths built from metadata; `mm_send()`/`mm_recv()` stay inside the miniccc mount. **Breaking:** rejects `_`, 1-char, all-digit, `all` and `phenix` hostnames.
 - **Apps**: Scale, wind turbine and Ignition names are restricted; protonuke and wireguard reject embedded newlines; wireguard configs are `0600`, sceptre startup scripts `0755`.
 - **SCORCH**: `cc`, `ssh` and `providerdata` transfers stay inside the run directory.
+- **SCORCH mm/tcpdump**: Run tshark without a shell for capture names.
+- **Wireguard App**: Write the private-key config `0600` from creation.
+- **SCORCH pcap/collector**: Run Wireshark tools and phenix without a shell.
+- **SCORCH art/mm/pcap**: Refuse arguments that crash or hang minimega.
 
 ## [2.0.0] - 2026-03-04
 

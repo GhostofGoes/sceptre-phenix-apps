@@ -2,7 +2,7 @@ import time
 from pathlib import PurePath
 
 from phenix_apps.apps.scorch import ComponentBase
-from phenix_apps.common import utils
+from phenix_apps.common import settings, utils
 from phenix_apps.common.logger import logger
 
 
@@ -85,16 +85,24 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"running {target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_background(f"python3 /{target_script_name}")
+                with utils.mm_cc_filtered(mm, f"name={target_host}"):
+                    utils.mm_cc_once(
+                        mm,
+                        target_host,
+                        f"python3 /{target_script_name}",
+                        background=True,
+                    )
 
                 logger.info(f"running {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_background(
-                    f"python3 /{script_name} --ip {target_ip} "
-                    f"--rate {rate} --duration {duration} --probability {prob}"
-                )
+                with utils.mm_cc_filtered(mm, f"name={hostname}"):
+                    utils.mm_cc_once(
+                        mm,
+                        hostname,
+                        f"python3 /{script_name} --ip {target_ip} "
+                        f"--rate {rate} --duration {duration} --probability {prob}",
+                        background=True,
+                    )
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -102,17 +110,20 @@ class TrafficGen(ComponentBase):
 
             if malware:
                 hostname = malware.get("hostname", "malware-gen")
-                rate = background.get("rate", 20)
-                prob = background.get("probability", 1.25)
+                rate = malware.get("rate", 20)
+                prob = malware.get("probability", 1.25)
                 script_name = PurePath(scripts["malwareGen"]).name
 
                 logger.info(f"running {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_background(
-                    f"python3 /{script_name} --ip {target_ip} "
-                    f"--rate {rate} --duration {duration} --probability {prob}"
-                )
+                with utils.mm_cc_filtered(mm, f"name={hostname}"):
+                    utils.mm_cc_once(
+                        mm,
+                        hostname,
+                        f"python3 /{script_name} --ip {target_ip} "
+                        f"--rate {rate} --duration {duration} --probability {prob}",
+                        background=True,
+                    )
             else:
                 logger.info("no malware client configured for target {target_host}")
 
@@ -131,6 +142,7 @@ class TrafficGen(ComponentBase):
         targets = self.metadata.get("targets", None)
 
         mm = self.mm_init()
+        failures = []
 
         for target in targets:
             target_host = target.get("hostname", "traffic-server")
@@ -144,13 +156,13 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"killing {target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_exec(f"pkill -f {target_script_name}")
+                self._teardown(
+                    mm, failures, target_host, f"pkill -f {target_script_name}"
+                )
 
                 logger.info(f"killing {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"pkill -f {script_name}")
+                self._teardown(mm, failures, hostname, f"pkill -f {script_name}")
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -162,10 +174,12 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"killing {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"pkill -f {script_name}")
+                self._teardown(mm, failures, hostname, f"pkill -f {script_name}")
             else:
                 logger.info("no malware client configured for target {target_host}")
+
+        if failures:
+            raise RuntimeError(f"could not stop traffic in {'; '.join(failures)}")
 
         logger.info(f"Stopped user component: {self.name}")
 
@@ -176,6 +190,7 @@ class TrafficGen(ComponentBase):
         targets = self.metadata.get("targets", None)
 
         mm = self.mm_init()
+        failures = []
 
         for target in targets:
             target_host = target.get("hostname", "traffic-server")
@@ -189,13 +204,11 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"deleting /{target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_exec(f"rm /{target_script_name}")
+                self._teardown(mm, failures, target_host, f"rm /{target_script_name}")
 
                 logger.info(f"deleting /{script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"rm /{script_name}")
+                self._teardown(mm, failures, hostname, f"rm /{script_name}")
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -207,12 +220,26 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"deleting /{script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"rm /{script_name}")
+                self._teardown(mm, failures, hostname, f"rm /{script_name}")
             else:
                 logger.info("no malware client configured for target {target_host}")
 
+        if failures:
+            raise RuntimeError(
+                f"could not delete traffic scripts in {'; '.join(failures)}"
+            )
+
         logger.info(f"Cleaned up user component: {self.name}")
+
+    @staticmethod
+    def _teardown(mm, failures, hostname, cmd):
+        """Queue ``cmd`` once in ``hostname``, recording a failure in
+        ``failures`` instead of raising, so that every VM is reached."""
+        with (
+            utils.record_failure(failures, hostname),
+            utils.mm_cc_filtered(mm, f"name={hostname}"),
+        ):
+            utils.mm_cc_once(mm, hostname, cmd, grace=settings.CC_TEARDOWN_GRACE)
 
 
 def main():

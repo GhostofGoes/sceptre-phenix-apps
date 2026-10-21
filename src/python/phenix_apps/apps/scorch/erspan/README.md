@@ -11,6 +11,11 @@ exe:    phenix-scorch-component-erspan
 stages: configure, cleanup
 ```
 
+The component adds one OVS mirror, named `m0`, to `local_bridge` and removes only
+that mirror at cleanup, so other mirrors on the bridge, such as the `mirror`
+app's, keep working. Cleanup finds its mirror by name and by its output port,
+`local_interface`, since other erspan components name their mirrors `m0` too.
+
 ## Metadata Options
 
 ```yaml

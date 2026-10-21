@@ -14,6 +14,9 @@ from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
 
+# Name of the OVS mirror this component adds to the local bridge.
+MIRROR_NAME = "m0"
+
 
 class ERSPAN(ComponentBase):
     """
@@ -45,7 +48,7 @@ class ERSPAN(ComponentBase):
         cmd_1 = f"ovs-vsctl add-port {self.local_bridge} {self.local_interface} -- set interface {self.local_interface} type=erspan options:remote_ip={self.remote_ip} options:key={self.session_key} options:erspan_ver=1"
         # Cmd to configure the mirror to send only the non-excluded ports to the interface
         cmd_2 = self._configure_mirror(
-            vlan_ids, self.local_bridge, "m0", self.local_interface
+            vlan_ids, self.local_bridge, MIRROR_NAME, self.local_interface
         )
 
         cmd_out = self._run_mm(cmd_1)
@@ -100,13 +103,31 @@ class ERSPAN(ComponentBase):
 
         logger.info("Cleaning up erspan on local server")
 
-        cmd_1 = f"ovs-vsctl clear bridge {self.local_bridge} mirrors"
-        cmd_2 = f"ovs-vsctl del-port {self.local_bridge} {self.local_interface}"
+        # Remove only this component's mirror; other mirrors on the bridge,
+        # such as phenix-app-mirror's, stay. Another erspan component, here or
+        # in another experiment, names its mirror the same, so find this one by
+        # its output port too. Configure may have failed before creating it.
+        cmds = []
+        failures = []
+        try:
+            for mirror in self._own_mirrors():
+                cmds.append(
+                    f"ovs-vsctl remove Bridge {self.local_bridge} mirrors {mirror}"
+                )
+        except RuntimeError as e:
+            failures.append(str(e))
+        cmds.append(
+            f"ovs-vsctl --if-exists del-port {self.local_bridge} {self.local_interface}"
+        )
 
-        cmd_out = self._run_mm(cmd_1)
-        self._log("cleanup_local", "Running Locally", **cmd_out)
-        cmd_out = self._run_mm(cmd_2)
-        self._log("cleanup_local", "Running Locally", **cmd_out)
+        # Clean up as much as possible, then report every failure.
+        for cmd in cmds:
+            try:
+                cmd_out = self._run_mm(cmd)
+            except RuntimeError as e:
+                failures.append(str(e))
+                continue
+            self._log("cleanup_local", "Running Locally", **cmd_out)
 
         if self.remote_config:
             rc = self.remote_config
@@ -129,7 +150,10 @@ class ERSPAN(ComponentBase):
             cmd_list.append(f"sudo ip link del dev {rc.remote_interface}")
 
             remote_cmd = " ; ".join(cmd_list)
-            self._run_remote_command(remote_cmd, "cleanup_remote")
+            try:
+                self._run_remote_command(remote_cmd, "cleanup_remote")
+            except Exception as e:
+                failures.append(f"remote cleanup on {rc.ssh_ip} failed: {e}")
         else:
             logger.info("No remote_config provided — skipping remote cleanup.")
 
@@ -138,7 +162,26 @@ class ERSPAN(ComponentBase):
         logger.info(f"Saving ERSPAN metadata to {m_path}")
         utils.write_json(m_path, self.erspan_metadata)
 
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
         logger.info(f"Stopped user component: {self.name}")
+
+    def _own_mirrors(self) -> list[str]:
+        """The UUIDs of the mirrors named MIRROR_NAME that output to this
+        component's port."""
+        found = self._run_mm(
+            f"ovs-vsctl --bare --columns=_uuid find Port name={self.local_interface}"
+        )
+        ports = " ".join(found["stdout"]).split()
+        if not ports:
+            return []
+
+        found = self._run_mm(
+            f"ovs-vsctl --bare --columns=_uuid find Mirror name={MIRROR_NAME} "
+            f"output_port={ports[0]}"
+        )
+        return " ".join(found["stdout"]).split()
 
     def _run_mm(self, command):
         """
@@ -146,19 +189,16 @@ class ERSPAN(ComponentBase):
         """
         try:
             res = self.mm.shell(command)
-            return {
-                "host": res[0].get("Host", ""),
-                "cmd": command,
-                "stdout": list(res[0].get("Response", "").splitlines()),
-                "stderr": list(res[0].get("Error", "").splitlines()),
-            }
         except Exception as e:
             logger.error(f"Failed to execute local command: {command}. Error: {e}")
-            return {
-                "host": "local",
-                "cmd": command,
-                "stderr": str(e),
-            }
+            raise RuntimeError(f"local command '{command}' failed: {e}") from e
+
+        return {
+            "host": res[0].get("Host", ""),
+            "cmd": command,
+            "stdout": list(res[0].get("Response", "").splitlines()),
+            "stderr": list(res[0].get("Error", "").splitlines()),
+        }
 
     def _run_remote_command(self, command, event_type="remote"):
         """
@@ -287,7 +327,8 @@ class ERSPAN(ComponentBase):
             f"-- --id=@p get Port {output_port} "
             f"-- --id=@m create Mirror name={mirror_name} "
             f"select_all=true select_vlan={select_vlan} output-port=@p "
-            f"-- set Bridge {bridge_name} mirrors=@m"
+            # add, not set: setting mirrors would drop the bridge's other mirrors
+            f"-- add Bridge {bridge_name} mirrors @m"
         )
 
     def _log(self, event_type: str, message: str | None = None, **data) -> None:

@@ -122,6 +122,23 @@ def scenario(monkeypatch, tmp_path):
     return build
 
 
+def run_both_stages(monkeypatch, exp):
+    """Run configure, then pre-start on its output, the way phenix chains them.
+
+    Returns the pre-start app.
+    """
+
+    from phenix_apps.apps.sceptre.app import Sceptre
+
+    for stage in ("configure", "pre-start"):
+        monkeypatch.setattr("sys.stdin", io.StringIO(exp.to_json()))
+        app = Sceptre("sceptre", stage)
+        {"configure": app.configure, "pre-start": app.pre_start}[stage]()
+        exp = app.experiment
+
+    return app
+
+
 def host(exp, hostname):
     """Return a host entry from the sceptre app's host list."""
 

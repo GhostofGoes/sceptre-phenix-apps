@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -29,7 +30,7 @@ import (
 var templates embed.FS
 
 const (
-	expectedArgs     = 2
+	expectedArgs     = 1
 	tapNameLength    = 8
 	mirrorNameLength = 15
 	erspanVersion2   = 2
@@ -39,26 +40,47 @@ func main() {
 	util.SetupLogging()
 	log := slog.Default()
 
-	if len(os.Args) != expectedArgs {
-		log.Error("incorrect amount of args provided")
-		return
+	err := run(log, os.Args[1:], os.Stdin, os.Stdout)
+	if err != nil {
+		log.Error("mirror app failed", "err", err)
+		os.Exit(1)
 	}
-
-	var (
-		stage  = os.Args[1]
-		dryrun = util.IsDryRun()
-	)
-
-	if stage == "version" {
-		printVersion(log)
-
-		return
-	}
-
-	processExperiment(log, stage, dryrun)
 }
 
-func printVersion(log *slog.Logger) {
+// run executes the stage named by the only argument. It writes the experiment
+// to stdout only when the stage succeeds, so a failed stage reaches phenix as
+// a nonzero exit and never as an experiment.
+func run(log *slog.Logger, args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) != expectedArgs {
+		return fmt.Errorf("expected one argument, the stage, but got %d", len(args))
+	}
+
+	stage := args[0]
+
+	if stage == "version" {
+		printVersion(log, stdout)
+
+		return nil
+	}
+
+	if !isStage(stage) {
+		return fmt.Errorf("unknown stage %q, want configure, pre-start, post-start, running or cleanup", stage)
+	}
+
+	return processExperiment(log, stage, util.IsDryRun(), stdin, stdout)
+}
+
+// isStage reports whether stage is a lifecycle stage phenix runs an app with.
+func isStage(stage string) bool {
+	switch stage {
+	case "configure", "pre-start", "post-start", "running", "cleanup":
+		return true
+	default:
+		return false
+	}
+}
+
+func printVersion(log *slog.Logger, stdout io.Writer) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		log.Error("unable to read build info")
@@ -79,20 +101,18 @@ func printVersion(log *slog.Logger) {
 		}
 	}
 
-	fmt.Fprintf(os.Stdout, "%s - %s (%s)\n", version.Version, rev, ts)
+	fmt.Fprintf(stdout, "%s - %s (%s)\n", version.Version, rev, ts)
 }
 
-func processExperiment(log *slog.Logger, stage string, dryrun bool) {
-	body, err := io.ReadAll(os.Stdin)
+func processExperiment(log *slog.Logger, stage string, dryrun bool, stdin io.Reader, stdout io.Writer) error {
+	body, err := io.ReadAll(stdin)
 	if err != nil {
-		log.Error("unable to read JSON from STDIN")
-		return
+		return fmt.Errorf("reading experiment from stdin: %w", err)
 	}
 
 	exp, err := util.DecodeExperiment(body)
 	if err != nil {
-		log.Error("decoding experiment", "err", err)
-		return
+		return fmt.Errorf("decoding experiment from stdin: %w", err)
 	}
 
 	endpoint := os.Getenv("PHENIX_STORE_ENDPOINT")
@@ -102,50 +122,88 @@ func processExperiment(log *slog.Logger, stage string, dryrun bool) {
 		log.Error("initializing store", "err", err)
 	}
 
-	if !runStage(log, stage, exp, dryrun, body) {
-		return
-	}
-
-	body, err = json.Marshal(exp)
+	ran, err := runStage(log, stage, exp, dryrun)
 	if err != nil {
-		log.Error("unable to convert experiment to JSON")
-		return
+		return err
 	}
 
-	_, _ = os.Stdout.Write(body)
+	// A stage the app has no work in, such as running, passes the experiment
+	// through unchanged.
+	if ran {
+		body, err = mergeExperiment(body, exp)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = stdout.Write(body)
+	if err != nil {
+		return fmt.Errorf("writing experiment to stdout: %w", err)
+	}
+
+	return nil
 }
 
-func runStage(log *slog.Logger, stage string, exp *types.Experiment, dryrun bool, body []byte) bool {
+// mergeExperiment returns the experiment read from stdin with its metadata,
+// spec and status replaced by exp's, so the top-level fields that the pinned
+// phenix types do not know survive the stage. Fields they do not know inside
+// metadata, spec or status are still lost.
+func mergeExperiment(body []byte, exp *types.Experiment) ([]byte, error) {
+	var doc map[string]json.RawMessage
+
+	err := json.Unmarshal(body, &doc)
+	if err != nil {
+		return nil, fmt.Errorf("parsing experiment from stdin: %w", err)
+	}
+
+	if doc == nil {
+		doc = make(map[string]json.RawMessage)
+	}
+
+	encoded, err := json.Marshal(exp)
+	if err != nil {
+		return nil, fmt.Errorf("encoding experiment to JSON: %w", err)
+	}
+
+	var fields map[string]json.RawMessage
+
+	err = json.Unmarshal(encoded, &fields)
+	if err != nil {
+		return nil, fmt.Errorf("parsing encoded experiment: %w", err)
+	}
+
+	maps.Copy(doc, fields)
+
+	merged, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encoding merged experiment to JSON: %w", err)
+	}
+
+	return merged, nil
+}
+
+// runStage runs the named stage and reports whether the app has work in it.
+func runStage(log *slog.Logger, stage string, exp *types.Experiment, dryrun bool) (bool, error) {
 	var err error
 
 	switch stage {
 	case "configure":
 		err = configure(log, exp)
-		if err != nil {
-			log.Error("failed to execute configure stage", "err", err)
-		}
 	case "pre-start":
 		err = preStart(log, exp, dryrun)
-		if err != nil {
-			log.Error("failed to execute pre-start stage", "err", err)
-		}
 	case "post-start":
 		err = postStart(log, exp, dryrun)
-		if err != nil {
-			log.Error("failed to execute post-start stage", "err", err)
-		}
 	case "cleanup":
 		err = cleanup(log, exp, dryrun)
-		if err != nil {
-			log.Error("failed to execute cleanup stage", "err", err)
-		}
 	default:
-		_, _ = os.Stdout.Write(body)
-
-		return false
+		return false, nil
 	}
 
-	return true
+	if err != nil {
+		return true, fmt.Errorf("executing %s stage: %w", stage, err)
+	}
+
+	return true, nil
 }
 
 func configure(log *slog.Logger, exp *types.Experiment) error {
@@ -744,6 +802,15 @@ func cleanup(log *slog.Logger, exp *types.Experiment, dryrun bool) error {
 
 	if amd.MirrorBridge == "" {
 		amd.MirrorBridge = exp.Spec.DefaultBridge()
+	}
+
+	// post-start records the mirror app's status only once it succeeds, and
+	// removes what it created when it fails, so without a status there is
+	// nothing to remove. phenix runs cleanup after a failed start too.
+	if _, ok := exp.Status.AppStatus()["mirror"]; !ok {
+		log.Info("no mirror app status, so nothing to clean up")
+
+		return nil
 	}
 
 	cluster := cluster(exp)

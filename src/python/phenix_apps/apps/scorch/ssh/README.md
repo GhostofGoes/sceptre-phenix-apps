@@ -22,6 +22,12 @@ metadata:
     - <string> # (OPTIONAL) Remote file or directory to pull using SFTP. Files will be saved in the scorch artifacts directory under stage name.
 ```
 
+The commands run joined with `&&`. The stage fails when they exit non-zero or a
+file cannot be fetched; the other files are still fetched and
+`ssh_metadata_<stage>.json`, with each command's output and exit status, is
+still written first. If the commands cannot be run at all, for example because
+the SSH channel fails, the stage fails at once without fetching files.
+
 ## Example Configuration
 
 ```yaml

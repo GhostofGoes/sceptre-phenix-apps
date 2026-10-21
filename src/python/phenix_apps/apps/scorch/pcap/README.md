@@ -8,6 +8,11 @@ exe:    phenix-scorch-component-pcap
 stages: start, stop
 ```
 
+The stop stage stops each capture by VM interface (`capture pcap delete vm
+<name> <interface index>`), which needs minimega 3.3.0 or later, for both the
+minimega server and its Python module. It tries every capture before it fails
+on the ones minimega could not stop.
+
 ## Metadata Options
 
 ```yaml
@@ -42,7 +47,7 @@ metadata:
             - 'UNIX_MS'
 ```
 
-The `filter` and `snaplen` options are optional. `filter` and `snaplen` will also apply to ALL captures on all VMs. Not sure how to work around this limitation at the moment.
+The `filter` and `snaplen` options are optional. Each applies to every VM this component captures; per-VM values are not supported. minimega keeps one filter and one snaplen per namespace for every capture started while they are set, so the component sets its `filter` and `snaplen` (or clears ones another component left) before starting its captures and clears both once they have started. It clears the filter by setting a blank one, `' '`, which matches every packet, because minimega ignores an empty filter sent in a namespace; `capture pcap filter` then reports `" "`. It clears the snaplen by setting 0, minimega's default. The component refuses, before it sets anything, a `filter` with a non-printable character other than a tab or line break, or with a backslash, a quote or `#` but no space, which minimega cannot relay intact.
 
 The `convertToJSON` creates `.jsonl` (JSON Lines format) files from the PCAP files. This option is important if Filebeat is going to be used to process the results of the traffic capture to send to Elastic. By default it is disabled since it can take a while to complete. If `convertToJSON` is `true`, then it is assumed that the `tshark` executable is present on the host running this component.
 

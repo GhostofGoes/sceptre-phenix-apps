@@ -85,6 +85,10 @@ class SSH(ComponentBase):
             user=self.user,
         )
 
+        # Failures are collected so files are still fetched and the metadata
+        # still saved, then fail the stage together.
+        failures = []
+
         ssh = None
         try:
             ssh = self._connect()
@@ -93,6 +97,12 @@ class SSH(ComponentBase):
             self._log(f"{stage}_remote", "Running Remotely", cmd=remote_cmd)
             cmd_out = self._run_remote_command(ssh, remote_cmd)
             self._log(f"{stage}_remote", **cmd_out)
+
+            if cmd_out["exit_status"] != 0:
+                failures.append(
+                    f"command '{remote_cmd}' on {self.ip} failed with exit status "
+                    f"{cmd_out['exit_status']}: {cmd_out['stderr']}"
+                )
 
             if self.files:
                 sftp_path = self.base_dir / stage
@@ -106,6 +116,10 @@ class SSH(ComponentBase):
                     )
                     if files_out.get("status", "") == "error":
                         logger.error(files_out.get("error", ""))
+                        failures.append(
+                            f"fetching '{remote_file}' from {self.ip} failed: "
+                            f"{files_out.get('error', '')}"
+                        )
         except Exception as e:
             logger.error(e)
             raise
@@ -120,6 +134,9 @@ class SSH(ComponentBase):
         m_path = Path(self.base_dir, f"ssh_metadata_{stage}.json")
         logger.info(f"Saving SSH metadata to {m_path}")
         utils.write_json(m_path, self.ssh_metadata)
+
+        if failures:
+            raise RuntimeError("; ".join(failures))
 
     def _connect(self) -> paramiko.SSHClient:
         """
@@ -160,28 +177,29 @@ class SSH(ComponentBase):
                 "cmd": "<command run>",
                 "stdout": "<output from run if any>",
                 "stderr": "<error message if any>",
+                "exit_status": <exit status of the command>,
             }
+
+        Raises:
+            RuntimeError: If the command could not be run at all.
         """
         try:
             _stdin, stdout, stderr = ssh.exec_command(command)
             output = stdout.read().decode().strip()
             error = stderr.read().decode().strip()
-
-            return {
-                "host": self.ip,
-                "cmd": command,
-                "stdout": output,
-                "stderr": error,
-            }
-
+            exit_status = stdout.channel.recv_exit_status()
         except Exception as e:
-            logger.error(f"Failed to execute remote command: {command}. Error: {e}")
-            return {
-                "host": self.ip,
-                "cmd": command,
-                "stdout": "",
-                "stderr": str(e),
-            }
+            raise RuntimeError(
+                f"failed to execute remote command '{command}' on {self.ip}: {e}"
+            ) from e
+
+        return {
+            "host": self.ip,
+            "cmd": command,
+            "stdout": output,
+            "stderr": error,
+            "exit_status": exit_status,
+        }
 
     def _fetch_remote(
         self, ssh: paramiko.SSHClient, remote_path: str, local_path: str

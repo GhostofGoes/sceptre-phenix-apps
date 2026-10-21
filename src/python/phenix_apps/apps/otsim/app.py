@@ -9,6 +9,7 @@ from phenix_apps.apps.otsim.infrastructure import Infrastructure
 from phenix_apps.apps.otsim.logic import Logic
 from phenix_apps.apps.otsim.nodered import NodeRed
 from phenix_apps.common import utils
+from phenix_apps.common.error import AppError
 from phenix_apps.common.logger import logger
 
 
@@ -34,6 +35,17 @@ class OTSim(AppBase):
                         iface = None
 
                     if any(key in broker for key in ["base-fed-count", "dynamic"]):
+                        # Both apps would inject 90-helics-broker.sh into the
+                        # same host, which minimega rejects at start.
+                        if self.extract_app("helics"):
+                            raise AppError(
+                                f"ot-sim: helics.broker for '{hostname}' sets "
+                                "base-fed-count or dynamic, but the helics app "
+                                "also writes /etc/phenix/startup/"
+                                f"90-helics-broker.sh for '{hostname}'; remove "
+                                "them and let the helics app start the brokers"
+                            )
+
                         if hostname not in self.brokers:
                             self.brokers[hostname] = {
                                 "feds": broker.get("base-fed-count", 0),
@@ -47,7 +59,11 @@ class OTSim(AppBase):
                         self.brokers[hostname]["feds"] += 1
 
                     addr = self.extract_node_interface_ip(hostname, iface)
-                    assert addr
+                    if not addr:
+                        raise AppError(
+                            f"ot-sim: helics.broker.hostname '{broker['hostname']}' "
+                            "names no interface with an address in the topology"
+                        )
 
                     # Check to see if helics app is being used. If so, check if ot-sim
                     # broker matches root broker. If not, append default port 24000 to
@@ -83,6 +99,26 @@ class OTSim(AppBase):
                 return md["helics"]["scan-rate"]
             return 5
         return None
+
+    def __broker_address(self, hostname, md):
+        """The HELICS broker address for the I/O module of fd-server `hostname`."""
+        if "helics" in md and "broker" in md["helics"]:
+            addr = self.__process_helics_broker_metadata(md)
+            missing = "its helics.broker sets neither hostname nor address"
+        else:
+            addr = self.__process_helics_broker_metadata(self.metadata)
+            missing = (
+                "neither its metadata nor the app metadata sets "
+                "helics.broker.hostname or helics.broker.address"
+            )
+
+        if not addr:
+            raise AppError(
+                f"ot-sim: fd-server '{hostname}' has modbus or dnp3 devices, so its "
+                f"I/O module needs a HELICS broker, but {missing}"
+            )
+
+        return addr
 
     def __init_defaults(self):
         self.default_infrastructure: str = self.metadata.get(
@@ -145,7 +181,7 @@ class OTSim(AppBase):
             infra = md.get("infrastructure", self.default_infrastructure)
 
             config = Config(self.metadata)
-            injects = config.init_xml_root(server.metadata)
+            injects = config.init_xml_root(server.metadata, server.hostname)
 
             for inject in injects:  # will at least be an empty list
                 self.add_inject(hostname=server.hostname, inject=inject)
@@ -203,15 +239,10 @@ class OTSim(AppBase):
 
                 end_time.text = self.end_time
 
+                addr = self.__broker_address(server.hostname, md)
+                broker.text = addr
+
                 if "helics" in md:
-                    if "broker" in md["helics"]:
-                        addr = self.__process_helics_broker_metadata(md)
-                    else:
-                        addr = self.__process_helics_broker_metadata(self.metadata)
-
-                    assert addr
-                    broker.text = addr
-
                     if "federate" in md["helics"]:
                         if isinstance(md["helics"]["federate"], str):
                             federate.text = md["helics"]["federate"]
@@ -228,10 +259,6 @@ class OTSim(AppBase):
                         log_level.text = "SUMMARY"
 
                 else:
-                    addr = self.__process_helics_broker_metadata(self.metadata)
-                    assert addr
-
-                    broker.text = addr
                     federate.text = server.hostname
                     log_level.text = "SUMMARY"
 
@@ -302,7 +329,7 @@ class OTSim(AppBase):
 
         for fep in feps:
             config = Config(self.metadata)
-            injects = config.init_xml_root(fep.metadata)
+            injects = config.init_xml_root(fep.metadata, fep.hostname)
 
             for inject in injects:  # will at least be an empty list
                 self.add_inject(hostname=fep.hostname, inject=inject)
@@ -342,7 +369,7 @@ class OTSim(AppBase):
 
         for client in clients:
             config = Config(self.metadata)
-            injects = config.init_xml_root(client.metadata)
+            injects = config.init_xml_root(client.metadata, client.hostname)
 
             for inject in injects:  # will at least be an empty list
                 self.add_inject(hostname=client.hostname, inject=inject)
