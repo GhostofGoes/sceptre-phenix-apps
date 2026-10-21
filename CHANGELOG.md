@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SCEPTRE App**: Test suite (128 tests), two of them characterization tests over both stages and all 310 infrastructure/device-type/protocol combinations, plus `apps/sceptre/README.md`.
 - **SCORCH**: Pydantic metadata models for components (#160).
 - **SCORCH**: `phenix-scorch-validate` checks component metadata.
+- **Caldera App**: Server Firefox skips its Terms of Use dialog.
 
 ### Changed
 - **OT-sim App**: DNP3 address assignment is a module function (`protocols.dnp3.assign_addresses`)
