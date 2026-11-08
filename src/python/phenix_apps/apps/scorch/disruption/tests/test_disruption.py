@@ -301,3 +301,24 @@ def test_attacker_os_must_be_known():
     md["dos"]["attacker"]["os_type"] = "plan9"
     with pytest.raises(ValueError, match=r"dos\.attacker\.os_type"):
         parse_metadata(DisruptionMetadata, md, "d")
+
+
+def test_cleanup_brings_the_attacker_interfaces_up_on_the_attacker_only(mocker):
+    disruption = stub_disruption(dos_metadata())
+    disruption.name = "d"
+    disruption.mm = mocker.Mock()
+    disruption._kill_dos_processes = mocker.Mock()
+    disruption._attacker_extra_interfaces = mocker.Mock(return_value=["eth1"])
+    mocker.patch("phenix_apps.apps.scorch.disruption.disruption.sleep")
+
+    disruption.cleanup()
+
+    # mm_delete_file clears its own filter, so the interface command needs one
+    assert disruption.mm.method_calls == [
+        mocker.call.cc_filter("name=attacker"),
+        mocker.call.cc_exec_once("rm -f /root/out.json"),
+        mocker.call.clear_cc_filter(),
+        mocker.call.cc_filter("name=attacker"),
+        mocker.call.cc_exec_once("ip link set eth1 up"),
+        mocker.call.clear_cc_filter(),
+    ]

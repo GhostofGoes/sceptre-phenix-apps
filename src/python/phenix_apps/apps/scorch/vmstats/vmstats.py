@@ -125,9 +125,8 @@ class VMStats(ComponentBase):
             self.mm.vm_tag(vm, "vmstat", "1")
 
         self.mm.clear_cc_prefix()
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_background(f"bash -c '{vmstat_script(freq)} >> /vmstat.out'")
-        self.mm.clear_cc_filter()
+        with utils.mm_cc_filter(self.mm, "vmstat=1 os=linux"):
+            self.mm.cc_background(f"bash -c '{vmstat_script(freq)} >> /vmstat.out'")
 
         logger.info(f"Started user component: {self.name}")
 
@@ -137,9 +136,7 @@ class VMStats(ComponentBase):
         vms = self.__vm_list()
 
         logger.info("killing vmstat processes")
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_exec_once("pkill vmstat")
-        self.mm.clear_cc_filter()
+        utils.mm_kill_process(self.mm, "vmstat=1 os=linux", "vmstat")
 
         time.sleep(self.config.stopWait)
 

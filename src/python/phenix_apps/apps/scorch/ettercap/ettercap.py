@@ -1,4 +1,5 @@
 from phenix_apps.apps.scorch import ComponentBase
+from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
 
 
@@ -34,18 +35,14 @@ class Ettercap(ComponentBase):
 
             logger.info(f"ensuring interface {iface} is up in VM {hostname}")
 
-            cmd = f"ip link set {iface} up"
+            with utils.mm_cc_filter(mm, f"name={hostname}"):
+                mm.cc_exec(f"ip link set {iface} up")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec(cmd)
+                logger.info(
+                    f"starting ettercap using {method} against {targets} in VM {hostname}"
+                )
 
-            logger.info(
-                f"starting ettercap using {method} against {targets} in VM {hostname}"
-            )
-
-            cmd = f"ettercap -Tq -i {iface} -M {method} {targets}"
-
-            mm.cc_background(cmd)
+                mm.cc_background(f"ettercap -Tq -i {iface} -M {method} {targets}")
 
         logger.info(f"Started user component: {self.name}")
 
@@ -64,8 +61,8 @@ class Ettercap(ComponentBase):
 
             logger.info(f"stopping ettercap in VM {hostname}")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec("pkill ettercap")
+            with utils.mm_cc_filter(mm, f"name={hostname}"):
+                mm.cc_exec("pkill ettercap")
 
         logger.info(f"Stopped user component: {self.name}")
 

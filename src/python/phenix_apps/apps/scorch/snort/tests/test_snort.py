@@ -65,3 +65,13 @@ def test_start_rejects_unsafe_interface(mocker, iface):
         sn.start()
 
     sn.mm.cc_background.assert_not_called()
+
+
+def test_start_clears_the_filter_it_sets(mocker):
+    sn = component(mocker)
+    sn.start()
+
+    calls = [c[0] for c in sn.mm.method_calls]
+    assert calls[0] == "cc_filter"
+    assert calls[-1] == "clear_cc_filter"
+    assert calls.count("cc_filter") == calls.count("clear_cc_filter") == 1

@@ -475,42 +475,42 @@ class Iperf(ComponentBase):
         logger.info("Starting iperf server processes...")
         for server in mapping.values():
             utils.mm_cc_filter_vm(self.mm, server.hostname)  # e.g. "control-scada"
+            try:
+                # Only need 1 server process for rperf
+                if self.config.use_rperf:
+                    server_cmd = f"{server.exe_path} --server"
+                    # TODO: add_server_args from metadata for rperf
+                    logger.info(f"server_cmd for '{server.hostname}': {server_cmd}")
+                    self.mm.cc_background(server_cmd)
+                else:
+                    # Start a server process for each client it will be communicating with
+                    for client in server.clients.values():
+                        logger.info(
+                            f"starting iperf server process for client '{client.hostname}' on server '{server.hostname}'"
+                        )
 
-            # Only need 1 server process for rperf
-            if self.config.use_rperf:
-                server_cmd = f"{server.exe_path} --server"
-                # TODO: add_server_args from metadata for rperf
-                logger.info(f"server_cmd for '{server.hostname}': {server_cmd}")
-                self.mm.cc_background(server_cmd)
-            else:
-                # Start a server process for each client it will be communicating with
-                for client in server.clients.values():
-                    logger.info(
-                        f"starting iperf server process for client '{client.hostname}' on server '{server.hostname}'"
-                    )
+                        idle_timeout = math.ceil(self.config.run_duration + 5.0)
+                        server_cmd = f"{server.exe_path} --server --one-off --bind {server.ip} --json --logfile {client.server_log_path} --port {client.port} --idle-timeout {idle_timeout}"
 
-                    idle_timeout = math.ceil(self.config.run_duration + 5.0)
-                    server_cmd = f"{server.exe_path} --server --one-off --bind {server.ip} --json --logfile {client.server_log_path} --port {client.port} --idle-timeout {idle_timeout}"
+                        is_linux = node_info["os_types"][server.hostname] == "linux"
+                        if is_linux:
+                            server_cmd += f" --pidfile {client.server_pid_path}"
 
-                    is_linux = node_info["os_types"][server.hostname] == "linux"
-                    if is_linux:
-                        server_cmd += f" --pidfile {client.server_pid_path}"
+                        # Add user-configured arguments to the iperf server process for this client
+                        if client.add_server_args:
+                            server_cmd += f" {client.add_server_args}"
 
-                    # Add user-configured arguments to the iperf server process for this client
-                    if client.add_server_args:
-                        server_cmd += f" {client.add_server_args}"
+                        # debugging logs
+                        if is_linux:
+                            server_cmd = f"bash -c '{server_cmd} >/iperf_server-log_client-{client.hostname}_server-{server.hostname}.log 2>&1'"
 
-                    # debugging logs
-                    if is_linux:
-                        server_cmd = f"bash -c '{server_cmd} >/iperf_server-log_client-{client.hostname}_server-{server.hostname}.log 2>&1'"
-
-                    logger.info(f"server_cmd for {server.hostname}: {server_cmd}")
-                    retval = self.mm.cc_background(server_cmd)
-                    logger.info(
-                        f"return val from 'cc background' for server_cmd: {retval}"
-                    )
-
-        self.mm.clear_cc_filter()
+                        logger.info(f"server_cmd for {server.hostname}: {server_cmd}")
+                        retval = self.mm.cc_background(server_cmd)
+                        logger.info(
+                            f"return val from 'cc background' for server_cmd: {retval}"
+                        )
+            finally:
+                self.mm.clear_cc_filter()
 
         # Wait for server processes to start user-configurable delay
         startup_delay = self.config.server_startup_delay
@@ -568,7 +568,10 @@ class Iperf(ComponentBase):
 
                 logger.info(f"client_cmd for '{client.hostname}': {client_cmd}")
                 utils.mm_cc_filter_vm(self.mm, client.hostname)
-                self.mm.cc_background(client_cmd)
+                try:
+                    self.mm.cc_background(client_cmd)
+                finally:
+                    self.mm.clear_cc_filter()
 
         logger.info("finished starting all iperf processes")
         logger.info(f"Started user component: {self.name}")
@@ -582,9 +585,9 @@ class Iperf(ComponentBase):
         timeout: float = 10.0,
     ) -> list:
         self.mm.clear_cc_prefix()
-        self.mm.cc_filter(cc_filter)
         self.mm.cc_prefix(prefix)
-        self.mm.cc_exec_once(cmd)
+        with utils.mm_cc_filter(self.mm, cc_filter):
+            self.mm.cc_exec_once(cmd)
 
         # wait for responses count to reach count of VMs of the type
         utils.mm_wait_for_prefix(

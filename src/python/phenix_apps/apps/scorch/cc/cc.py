@@ -43,13 +43,15 @@ class CC(ComponentBase):
             elif cmd.type == "exec":
                 once = cmd.get("once", True)
                 filter_ = cmd.get("filter", None)
-                if filter_:
-                    self.mm.cc_filter(filter_)
+                run = self.mm.cc_exec_once if once else self.mm.cc_exec
 
-                if once:
-                    self.mm.cc_exec_once(cmd.args)
+                # The filter aims only this command: left set, it would aim
+                # every later cc command in the namespace too.
+                if filter_:
+                    with utils.mm_cc_filter(self.mm, filter_):
+                        run(cmd.args)
                 else:
-                    self.mm.cc_exec(cmd.args)
+                    run(cmd.args)
 
                 logger.info(
                     f"command '{_one_line(cmd.args)}' executed with filter '{filter_}' using cc"
@@ -153,10 +155,13 @@ class CC(ComponentBase):
                     else:
                         utils.mm_cc_filter_vm(self.mm, vm.hostname)
 
-                        if once:
-                            self.mm.cc_exec_once(script)
-                        else:
-                            self.mm.cc_exec(script)
+                        try:
+                            if once:
+                                self.mm.cc_exec_once(script)
+                            else:
+                                self.mm.cc_exec(script)
+                        finally:
+                            self.mm.clear_cc_filter()
 
                         logger.info(
                             f"command '{_one_line(cmd.args)}' executed in VM {vm.hostname} using cc"
@@ -172,12 +177,14 @@ class CC(ComponentBase):
 
                     utils.mm_cc_filter_vm(self.mm, vm.hostname)
 
-                    if once:
-                        self.mm.cc_background_once(script)
-                    else:
-                        self.mm.cc_background(script)
+                    try:
+                        if once:
+                            self.mm.cc_background_once(script)
+                        else:
+                            self.mm.cc_background(script)
+                    finally:
+                        self.mm.clear_cc_filter()
 
-                    self.mm.clear_cc_filter()
                     logger.info(
                         f"command '{_one_line(cmd.args)}' backgrounded in VM {vm.hostname}"
                     )

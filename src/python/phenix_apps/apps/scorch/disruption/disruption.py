@@ -382,9 +382,8 @@ class Disruption(ComponentBase):
             dos_cmd = self._build_dos_cmd(
                 self.dos.start_delay, self.dos.run_for(self.config.run_duration)
             )
-            self.mm.cc_filter(f"name={self.dos.attacker.hostname}")
-            self.mm.cc_background(dos_cmd)
-            self.mm.clear_cc_filter()
+            with utils.mm_cc_filter(self.mm, f"name={self.dos.attacker.hostname}"):
+                self.mm.cc_background(dos_cmd)
 
             logger.info(f"sleeping for {self.physical.start_delay} seconds")
             sleep(self.physical.start_delay)
@@ -451,13 +450,14 @@ class Disruption(ComponentBase):
                 os_type=self.dos.attacker.os_type,
             )
 
-            # reset attacker interfaces (the filter is still the attacker)
-            for iface in self._attacker_extra_interfaces():
-                logger.info(f"bringing up interface {iface} on {a_host}")
-                self.mm.cc_exec_once(self._attacker_iface_cmd(iface, up=True))
+            # reset attacker interfaces; mm_delete_file cleared its filter, so
+            # without one these would reach every VM
+            with utils.mm_cc_filter(self.mm, f"name={a_host}"):
+                for iface in self._attacker_extra_interfaces():
+                    logger.info(f"bringing up interface {iface} on {a_host}")
+                    self.mm.cc_exec_once(self._attacker_iface_cmd(iface, up=True))
 
             sleep(1.0)
-            self.mm.clear_cc_filter()
 
         if self.config.current_disruption in ("physical", "cyber_physical"):
             self._kill_phys_process()
