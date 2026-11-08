@@ -5,8 +5,10 @@ import uuid
 from typing import Final
 
 from box import Box
+from pydantic import TypeAdapter
 
 from phenix_apps.apps.scorch import ComponentBase
+from phenix_apps.apps.scorch.app import FilePath
 from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
 from phenix_apps.common.settings import SCORCH_HOST_VALIDATORS
@@ -15,18 +17,29 @@ from phenix_apps.common.settings import SCORCH_HOST_VALIDATORS
 # This is overwritten if a value is provided via goartPath
 GOART_BASE: Final[str] = "/phenix/art"
 
+# goartPath and outputPath end up in a command line on the VM.
+_FILE_PATH: Final[TypeAdapter[str]] = TypeAdapter(FilePath)
+
 
 class AtomicRedTeam(ComponentBase):
     def __init__(self):
         ComponentBase.__init__(self, "art")
         self.execute_stage()
 
+    def _path_option(self, option: str) -> str | None:
+        value = self.metadata.get(option) if self.metadata else None
+        return _FILE_PATH.validate_python(value) if value else None
+
     def _goart_path(self, os_type):
+        if goart_path := self._path_option("goartPath"):
+            return goart_path
         if os_type == "windows":
             return "C:/phenix/art/goart.exe"
         return f"{GOART_BASE}/goart"
 
     def _tmp_path(self, os_type, filename):
+        if output_path := self._path_option("outputPath"):
+            return f"{output_path.rstrip('/')}/{filename}"
         if os_type == "windows":
             return f"/phenix/art/{filename}"
         return f"/tmp/{filename}"
@@ -36,13 +49,17 @@ class AtomicRedTeam(ComponentBase):
             shell_cmd = f'cmd /c "if not exist {goart_path} exit 1"'
         else:
             shell_cmd = f"test -x {goart_path}"
+        missing = (
+            f"goart not found or not executable at {goart_path} on {hostname}. "
+            "Ensure it is injected via topology."
+        )
         try:
-            utils.mm_exec_wait(mm, hostname, shell_cmd)
+            resp = utils.mm_exec_wait(mm, hostname, shell_cmd)
         except Exception as ex:
-            raise RuntimeError(
-                f"goart not found or not executable at {goart_path} on {hostname}. "
-                f"Ensure it is injected via topology."
-            ) from ex
+            raise RuntimeError(missing) from ex
+        # mm_exec_wait reports a command that failed by its exit code only
+        if resp["exitcode"] != 0:
+            raise RuntimeError(missing)
 
     def start(self):
         logger.info(f"Starting user component: {self.name}")
@@ -51,6 +68,7 @@ class AtomicRedTeam(ComponentBase):
         test_name = self.metadata.get("testName", None)
         test_index = self.metadata.get("testIndex", None)
         abort_on_error = self.metadata.get("abortOnError", False)
+        exec_wait = float(self.metadata.get("execWaitSeconds", 5))
 
         if not technique:
             raise ValueError("no technique configured")
@@ -97,8 +115,16 @@ class AtomicRedTeam(ComponentBase):
             cmd = f"{goart_path} {' '.join(args)}"
 
             logger.info(f"executing: {cmd}")
-            utils.mm_exec_wait(mm, hostname, cmd)
-            time.sleep(5)
+            resp = utils.mm_exec_wait(mm, hostname, cmd)
+            if resp["exitcode"] != 0:
+                msg = (
+                    f"goart exited {resp['exitcode']} on {hostname}: "
+                    f"{resp['stderr'] or resp['stdout'] or 'no output'}"
+                )
+                if abort_on_error:
+                    raise RuntimeError(msg)
+                logger.error(msg)
+            time.sleep(exec_wait)
             logger.info(f"retrieving results: {out_file}")
             results_file = self.base_dir / f"{hostname}.json"
 
