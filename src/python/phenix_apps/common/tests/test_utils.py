@@ -801,6 +801,9 @@ class _StubCCResponses:
     def cc_responses(self, *_args):
         return self._rows
 
+    def clear_cc_filter(self):
+        pass
+
 
 def test_cc_response_files_splits_stdout_and_stderr():
     text = _cc_responses_text(stderr="warn: x\n", stdout='{"path": "/etc/hosts"}\n')

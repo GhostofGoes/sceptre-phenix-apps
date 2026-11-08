@@ -19,6 +19,9 @@ def test_mm_exec_wait_reports_missing_output_as_empty_strings(monkeypatch):
         def cc_responses(self, _cmd_id):
             return []
 
+        def clear_cc_filter(self):
+            pass
+
     result = utils.mm_exec_wait(_MM(), "vm1", "true")
 
     assert result["stdout"] == ""

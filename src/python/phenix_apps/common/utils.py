@@ -601,10 +601,16 @@ def mm_cc_send_wait(
     """Send file ``src`` to ``vm`` via cc and wait for it to land.
 
     The filename identifies the invocation, so the ``sent`` column is matched
-    too.
+    too. The cc filter this sets is cleared once the send is queued.
     """
     uuid, host = mm_cc_filter_vm(mm, vm)
-    cmd_id = mm_command_id_for_host(mm.cc_send(src), host)
+
+    try:
+        resp = mm.cc_send(src)
+    finally:
+        mm.clear_cc_filter()
+
+    cmd_id = mm_command_id_for_host(resp, host)
 
     mm_wait_for_cmd(
         mm,
@@ -757,11 +763,18 @@ def mm_exec_wait(
     """Run ``cmd`` on ``vm`` via cc and wait for it to finish.
 
     ``timeout`` bounds the response wait; 0 (the default) waits indefinitely,
-    supervised instead by the client staying registered.
+    supervised instead by the client staying registered. The cc filter this
+    sets is cleared once the command is queued.
     """
     uuid, host = mm_cc_filter_vm(mm, vm, grace=client_grace)
 
-    resp = mm.cc_exec_once(cmd) if once else mm.cc_exec(cmd)
+    # A filter left set would aim every later cc command in the namespace, from
+    # any component or from phenix, at this VM alone.
+    try:
+        resp = mm.cc_exec_once(cmd) if once else mm.cc_exec(cmd)
+    finally:
+        mm.clear_cc_filter()
+
     cmd_id = mm_command_id_for_host(resp, host)
 
     mm_wait_for_cmd(
