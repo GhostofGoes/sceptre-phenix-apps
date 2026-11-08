@@ -119,16 +119,9 @@ class PCAP(ComponentBase):
         logger.info(f"Starting user component: {self.name}")
 
         self._check_run_order()
-        for row in self._active_captures():
-            logger.warning(
-                f"another capture is active in this minimega namespace: {row}; "
-                "clearing pcap captures to start ours will stop it. Do not run "
-                "pcap alongside other capture components (mm, tcpdump, erspan)"
-            )
 
-        logger.info("clearing capture on minimega")
-        self.mm.clear_capture("pcap")
-
+        # No `clear capture pcap` here: it would stop every capture in the
+        # namespace, other components' included.
         vms = self.config.vms
         logger.info(f"starting capture for {len(vms)} VMs")
         try:
