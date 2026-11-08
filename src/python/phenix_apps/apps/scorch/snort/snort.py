@@ -1,7 +1,9 @@
 import csv
 import json
+import re
 import time
 from pathlib import PurePath
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -9,6 +11,14 @@ from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.apps.scorch.app import Interface
 from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
+
+# Snort's log_tcpdump output names its packet log snort.log.<epoch time>, a new
+# one each time Snort starts.
+PACKET_LOG: Final[re.Pattern[str]] = re.compile(r"snort\.log\.\d+")
+
+# Seconds stop waits for Snort to exit after SIGINT, while it writes its final
+# statistics and flushes its logs, before it copies them anyway.
+EXIT_WAIT: Final[int] = 120
 
 
 class Snort(ComponentBase):
@@ -125,7 +135,33 @@ class Snort(ComponentBase):
         with utils.mm_cc_filter(mm, f"name={hostname}"):
             mm.cc_exec("pkill -INT snort")
 
-        logfiles = ["alert", "snort.log", "snort.stats"]
+        # SIGINT makes Snort write its statistics and flush its logs; copying
+        # them before it has exited would get partial or missing files.
+        exited = utils.mm_exec_wait(
+            mm,
+            hostname,
+            f"timeout {EXIT_WAIT} sh -c "
+            "'while pgrep -x snort >/dev/null; do sleep 1; done'",
+        )
+        if exited["exitcode"] != 0:
+            logger.warning(
+                f"Snort is still running in {hostname} {EXIT_WAIT} seconds after "
+                "SIGINT; its logs may be incomplete"
+            )
+
+        listing = self.run_and_check_command(
+            hostname, "ls -1 /var/log/snort", timeout=15.0
+        )
+        packet_logs = sorted(
+            name for name in listing["stdout"].split() if PACKET_LOG.fullmatch(name)
+        )
+        if not packet_logs:
+            raise RuntimeError(
+                f"no snort.log.<time> packet log in /var/log/snort on {hostname}; "
+                "snort.conf needs 'output log_tcpdump: snort.log'"
+            )
+
+        logfiles = ["alert", *packet_logs, "snort.stats"]
 
         for log in logfiles:
             log_path = self.base_dir / log
@@ -163,7 +199,7 @@ class Snort(ComponentBase):
         logger.info(f"Cleaning up user component: {self.name}")
 
         hostname = self.metadata.get("hostname", "detector")
-        logfiles = ["snort.log", "snort.err", "snort.stats"]
+        logfiles = ["snort.log.*", "snort.err", "snort.stats"]
 
         mm = self.mm_init()
 
@@ -171,7 +207,8 @@ class Snort(ComponentBase):
             for log in logfiles:
                 logger.info(f"deleting /var/log/snort/{log} from {hostname}")
 
-                mm.cc_exec(f"rm /var/log/snort/{log}")
+                # a shell expands the packet logs' glob
+                mm.cc_exec(f"bash -c 'rm -f /var/log/snort/{log}'")
 
         logger.info(f"Cleaned up user component: {self.name}")
 
