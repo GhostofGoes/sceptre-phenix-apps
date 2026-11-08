@@ -45,21 +45,18 @@ def run_component(monkeypatch, tmp_path):
         metadata: object,
         ctype: str | None = "test",
         cls: Callable[[], ComponentBase] = Component,
+        background: bool | None = None,
     ) -> ComponentBase:
+        component = {"name": "c", "type": ctype, "metadata": metadata}
+        if background is not None:
+            component["background"] = background
         experiment = {
             "spec": {
                 "experimentName": "exp",
                 "baseDir": str(tmp_path),
                 "scenario": {
                     "apps": [
-                        {
-                            "name": "scorch",
-                            "metadata": {
-                                "components": [
-                                    {"name": "c", "type": ctype, "metadata": metadata}
-                                ]
-                            },
-                        }
+                        {"name": "scorch", "metadata": {"components": [component]}}
                     ]
                 },
             }
@@ -159,6 +156,26 @@ def test_omitted_type_defaults_to_the_name(run_component):
     component.name = component.type = "c"
 
     assert component.extract_metadata() == {"count": 3}
+
+
+@pytest.mark.parametrize(
+    ("ctype", "background", "expected"),
+    [
+        ("test", True, True),
+        ("test", False, False),
+        ("test", None, False),
+        (None, True, True),
+    ],
+)
+def test_is_background_reads_the_component_flag(
+    run_component, ctype, background, expected
+):
+    component = run_component({"count": 3}, ctype=ctype, background=background)
+    if ctype is None:
+        # phenix core treats a component with no type as type == name
+        component.type = "c"
+
+    assert component.is_background() is expected
 
 
 def test_a_traceback_does_not_leak_metadata_values(run_component, capsys):

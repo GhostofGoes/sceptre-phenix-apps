@@ -136,3 +136,14 @@ def test_each_sample_logs_a_one_line_summary(tmp_path):
 
     assert "node1: load 0.5, 2 VMs" in lines
     assert not any("vm_list" in line for line in lines)
+
+
+def test_start_refuses_to_run_in_the_foreground(tmp_path):
+    hs = component(tmp_path, FakeMinimega(), poll=1)
+    hs.name = "hsfg"
+    hs.is_background = lambda: False
+
+    with pytest.raises(ValueError, match="must set background: true"):
+        hs.start()
+
+    assert not (tmp_path / "host_stats.jsonl").exists()
