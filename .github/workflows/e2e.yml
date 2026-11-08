@@ -1,0 +1,52 @@
+# End-to-end test of the apps against a real phenix and a real minimega with
+# KVM guests built from the sceptre-phenix-images recipes: phenix's E2E
+# workflow installs this commit's apps and runs the experiments that use them.
+name: E2E
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - '.github/workflows/e2e.yml'
+  push:
+    branches: ['main', 'ci-e2e-minimega']
+    paths:
+      - 'src/**'
+      - '.github/workflows/e2e.yml'
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Which phenix shards that use the apps to run
+        type: choice
+        options: [pr, nightly]
+        default: pr
+
+permissions:
+  contents: read
+
+# Runs of different events test different things (the nightly run adds the
+# slow shards), so they never share a group. A newer push to a pull request
+# cancels its running run; other runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: phenix E2E
+    permissions:
+      contents: read
+    # First-party workflow, deliberately tracking phenix's branch so the apps
+    # are tested against the phenix they will run under.
+    uses: GhostofGoes/sceptre-phenix/.github/workflows/e2e.yml@ci-e2e-minimega  # zizmor: ignore[unpinned-uses]
+    with:
+      phenix-repository: GhostofGoes/sceptre-phenix
+      phenix-ref: ci-e2e-minimega
+      apps-repository: ${{ github.repository }}
+      apps-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Every shard that installs the apps; the nightly tier adds the slow
+      # SCORCH and domain app runtime shards.
+      tier: ${{ github.event_name == 'schedule' && 'nightly' || inputs.tier || 'pr' }}
+      apps-shards: true

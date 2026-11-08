@@ -173,6 +173,7 @@ Security requirements:
 | `commits.yml` | Every pull request | Conventional Commit check of each commit subject |
 | `dispatch.yml` | Push to `main`, `sandialabs` only | `apps-update` repository dispatch to `sceptre-phenix` |
 | `release.yml` | Push to `main`, `sandialabs` only; manual dry run | releasaurus release pull request, tag, and notes |
+| `e2e.yml` | `src/**` or the workflow file; nightly; manual | phenix's E2E workflow: this commit's apps in the phenix shards that install them, on real minimega with KVM guests; nightly adds the slow shards |
 
 Path filters do not cover every build input. Run the relevant local checks after
 changing `pyproject.toml`, a `Makefile`, templates, package data, scripts, or
