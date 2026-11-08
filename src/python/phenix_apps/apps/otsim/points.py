@@ -130,16 +130,14 @@ class Outstations:
                 raise ValueError(f"ot-sim host '{hostname}' has no dnp3 section")
             registers = device.registers.get("dnp3", [])
         else:
-            downstream = md.get("downstream", [])
-            if not isinstance(downstream, list):
-                downstream = [downstream]
-            if downstream and "dnp3" not in downstream:
+            if "dnp3" not in device.downstream:
                 raise ValueError(
-                    f"ot-sim fep '{hostname}' serves {downstream} downstream, not dnp3"
+                    f"ot-sim fep '{hostname}' serves {device.downstream} downstream, "
+                    "not dnp3"
                 )
-            # the fep outstation serves every upstream register, grouped by the
+            # the fep outstation serves each upstream point once, grouped by the
             # protocol it was collected from
-            registers = [reg for regs in device.registers.values() for reg in regs]
+            registers = device.registers.get("dnp3", [])
 
         return [
             OutstationPoint(

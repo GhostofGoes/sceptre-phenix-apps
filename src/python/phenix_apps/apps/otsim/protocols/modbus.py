@@ -2,6 +2,19 @@ import lxml.etree as ET
 
 from phenix_apps.apps.otsim.protocols.protocol import Protocol, resolve_endpoint
 
+# Registers each OT-sim Modbus data type spans (OT-sim modbus/util/register.go).
+# Without a data-type attribute OT-sim reads and writes uint16.
+REGISTER_WIDTH = {
+    "int16": 1,
+    "uint16": 1,
+    "int32": 2,
+    "uint32": 2,
+    "int64": 4,
+    "uint64": 4,
+    "float": 2,
+    "double": 4,
+}
+
 
 class Modbus(Protocol):
     def __init__(self):
@@ -42,41 +55,35 @@ class Modbus(Protocol):
 
                 tag = ET.SubElement(discrete, "tag")
                 tag.text = reg.tag
-            elif reg.type == "analog-read":
-                typ = "input"
-                inp = ET.SubElement(self.root, "register", {"type": typ})
+            elif reg.type in ("analog-read", "analog-read-write"):
+                typ = "input" if reg.type == "analog-read" else "holding"
+                attrs = {"type": typ}
 
-                addr = ET.SubElement(inp, "address")
+                data_type = reg.md.get("data-type")
+                if data_type is not None:
+                    if data_type not in REGISTER_WIDTH:
+                        raise ValueError(
+                            f"Modbus register '{reg.tag}' has data-type "
+                            f"'{data_type}'; expected one of "
+                            f"{', '.join(REGISTER_WIDTH)}"
+                        )
+                    attrs["data-type"] = data_type
+
+                register = ET.SubElement(self.root, "register", attrs)
+
+                addr = ET.SubElement(register, "address")
                 addr.text = str(self.addrs[typ])
 
-                self.addrs[typ] += 1
+                self.addrs[typ] += REGISTER_WIDTH.get(data_type, 1)
 
-                tag = ET.SubElement(inp, "tag")
+                tag = ET.SubElement(register, "tag")
                 tag.text = reg.tag
 
-                if "scaling" in reg.md:
+                # OT-sim ignores scaling for floating-point registers.
+                if "scaling" in reg.md and data_type not in ("float", "double"):
                     scale = reg.md["scaling"]
 
-                    scaling = ET.SubElement(inp, "scaling")
-                    scaling.text = str(
-                        int(scale) * -1 if self.mode == "server" else int(scale)
-                    )
-            elif reg.type == "analog-read-write":
-                typ = "holding"
-                holding = ET.SubElement(self.root, "register", {"type": typ})
-
-                addr = ET.SubElement(holding, "address")
-                addr.text = str(self.addrs[typ])
-
-                self.addrs[typ] += 1
-
-                tag = ET.SubElement(holding, "tag")
-                tag.text = reg.tag
-
-                if "scaling" in reg.md:
-                    scale = reg.md["scaling"]
-
-                    scaling = ET.SubElement(holding, "scaling")
+                    scaling = ET.SubElement(register, "scaling")
                     scaling.text = str(
                         int(scale) * -1 if self.mode == "server" else int(scale)
                     )

@@ -31,7 +31,9 @@ spec:
           # host to start the broker with the given number of federates
           # plus however many devices with I/O modules are configured. The
           # optional `log-level` and `log-file` options for the broker are
-          # only used if a broker inject is created.
+          # only used if a broker inject is created. When the scenario also
+          # runs the `helics` app, that app writes the broker start scripts,
+          # so `base-fed-count` and `dynamic` are rejected.
           broker:
             hostname: helics-broker|IF0
             base-fed-count: 2
@@ -49,12 +51,17 @@ spec:
           pub-endpoint: tcp://127.0.0.1:5678  # this is the default
         cpu-module:
           api-endpoint: 0.0.0.0:9101 # this is the default; can be set to null to disable globally
-                                     # can also be set per device via host metadata
+                                     # can also be set per device via host metadata; with
+                                     # null here, only hosts that set their own `api-endpoint`
+                                     # or `api` get an API
           api:                                # can also be set per device via host metadata
-            endpoint: 0.0.0.0:9001            # this is the default if not provided
-            tls-key: /path/to/tls.key         # must be provided or API will be started without TLS
-            tls-certificate: /path/to/tls.crt # must be provided or API will be started without TLS
-            ca-certificate: /path/to/ca.crt   # not required; only used for mTLS authentication
+            endpoint: 0.0.0.0:9101            # this is the default if not provided
+            tls-key: /path/to/tls.key         # both or neither must be provided; neither starts
+            tls-certificate: /path/to/tls.crt # the API without TLS, either alone fails pre-start
+            ca-certificate: /path/to/ca.crt   # optional, for mTLS; fails pre-start without both above
+                                              # Each file that is set is injected below
+                                              # /etc/ot-sim/certs; unset or null fields add
+                                              # nothing to the config or the VM.
         ground-truth-module:
           elastic:
             endpoint: http://localhost:9200 # endpoint for ElasticSearch cluster
@@ -67,9 +74,17 @@ spec:
               voltage:
                 type: analog-read
                 modbus:      # Device type variables support per-protocol configurations. Right now,
-                  scaling: 2 # the Modbus protocol only looks for a single config: `scaling`. If not
-                             # provided, the scaling defaults to 0. The DNP3 protocol looks for four
-                             # configs: `sgvar`, `egvar`, `class`, and `sbo`.
+                  scaling: 2 # the Modbus protocol looks for two configs: `scaling` and `data-type`.
+                             # If not provided, the scaling defaults to 0. The DNP3 protocol looks for
+                             # four configs: `sgvar`, `egvar`, `class`, and `sbo`.
+                  data-type: int32 # OT-sim register type for analog variables; this is the
+                                   # default. int32, uint32, float use two registers each,
+                                   # int64, uint64, double four; int16 and uint16 use one, but
+                                   # uint16 cannot hold negative values or values above
+                                   # 655.35 at scaling 2. Each point's address follows the
+                                   # previous point's registers, on fd-servers and feps alike,
+                                   # so set `data-type: uint16` to keep the one-register
+                                   # layout of earlier releases.
             bus:
               voltage:
                 type: analog-read
@@ -132,9 +147,19 @@ spec:
           # to use for the federate the device will be providing. If enabled
           # globally, the `ground-truth-module` can be disabled on a per host
           # basis by explicitly setting the value to null or false.
+          # A host's `cpu-module` replaces the app's: it keeps only the
+          # app-level API endpoint when it sets none, never the app-level
+          # TLS files. When the app-level `cpu-module.api` sets TLS files,
+          # pre-start fails naming a host whose own `cpu-module` would serve
+          # the API over plain HTTP: its `cpu-module.api` must set
+          # `tls-key` and `tls-certificate`, both null for plain HTTP, or
+          # its `api-endpoint` must be null.
 
           helics:
             # Defaults to helics.broker in app metadata if not provided.
+            # An fd-server with modbus or dnp3 devices needs a `hostname`
+            # or `address` from one of the two; pre-start fails naming the
+            # host otherwise.
             # If provided for a host, and both `hostname` and
             # `base-fed-count` are provided, a separate inject is tracked
             # and generated for the given host in the topology file. Similar
@@ -185,6 +210,30 @@ spec:
               foo:
                 tag: foo.bar
                 value: 0
+      - hostname: gateway
+        metadata:
+          type: fep
+          upstream:     # devices to poll over every protocol they serve; the legacy
+          - outstation  # `connected_rtus` key is used if `upstream` is not present.
+                        # Each client is named `modbus-client-<upstream host>` or
+                        # `dnp3-client-<upstream host>` (and publishes
+                        # `<name>.connected`), apart from the `modbus-outstation`
+                        # server, since OT-sim modules ignore messages from a sender
+                        # with their own name.
+          downstream:   # protocols to serve every polled point over, dnp3 and/or modbus;
+          - dnp3        # defaults to dnp3, and any other value fails pre-start.
+          - modbus      # Each point is served with that protocol's settings from its
+                        # infrastructure variable (Modbus `scaling` and `data-type`, DNP3
+                        # `sgvar`, `egvar`, `class` and `sbo`), whichever protocol it is
+                        # polled with.
+      - hostname: hmi
+        metadata:
+          type: fd-client
+          connected_rtus: # fd-server or fep hosts to poll; a fep is polled over the
+          - gateway       # `downstream` protocols it serves, at the addresses it serves
+                          # them, not over the protocols it polls its `upstream` with.
+                          # Clients are named `modbus-client-<host>` and
+                          # `dnp3-client-<host>`, and publish `<name>.connected`.
 ```
 # Node-RED
 [Node-RED](https://www.node-red.dev/) is a coding software that is
