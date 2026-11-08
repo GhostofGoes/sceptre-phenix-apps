@@ -168,7 +168,13 @@ class OPCExport(ComponentBase):
         logger.info("Collecting log file for scada_to_elastic.py")
         self.recv_file(host, "/opcexport/scada_to_elastic.log")
         logger.info("Deleting log file")
-        utils.mm_delete_file(self.mm, f"name={host}", "/opcexport/scada_to_elastic.log")
+        # the OPC host is Windows, where the log is deleted with del, not rm
+        utils.mm_delete_file(
+            self.mm,
+            f"name={host}",
+            "/opcexport/scada_to_elastic.log",
+            os_type="windows",
+        )
 
         # TODO: validate that data made it into Elasticsearch
 
