@@ -189,7 +189,9 @@ class WindTurbine(AppBase):
 
     def __main_controller(self, node, anemo=None, yaw=None, match=None):
         config = Config(self.metadata)
-        config.init_xml_root(node.metadata)
+        # The CPU API's TLS files, when the app metadata sets them.
+        for inject in config.init_xml_root(node.metadata, node.hostname):
+            self.add_inject(hostname=node.hostname, inject=inject)
 
         tmpl = self.templates.get(node.metadata.get("template", "default"), {}).get(
             "main-controller", {}
@@ -448,7 +450,9 @@ class WindTurbine(AppBase):
         module.text = "ot-sim-wind-turbine-anemometer-module {{config_file}}"
 
         config = Config(self.metadata)
-        config.init_xml_root(node.metadata)
+        # The CPU API's TLS files, when the app metadata sets them.
+        for inject in config.init_xml_root(node.metadata, node.hostname):
+            self.add_inject(hostname=node.hostname, inject=inject)
 
         config.append_to_root(turbine)
         config.append_to_cpu(module)
@@ -484,7 +488,9 @@ class WindTurbine(AppBase):
         )
 
         config = Config(self.metadata)
-        config.init_xml_root(node.metadata)
+        # The CPU API's TLS files, when the app metadata sets them.
+        for inject in config.init_xml_root(node.metadata, node.hostname):
+            self.add_inject(hostname=node.hostname, inject=inject)
 
         mb = Modbus()
         mb.init_xml_root("server", node)
@@ -545,7 +551,9 @@ class WindTurbine(AppBase):
         )
 
         config = Config(self.metadata)
-        config.init_xml_root(node.metadata)
+        # The CPU API's TLS files, when the app metadata sets them.
+        for inject in config.init_xml_root(node.metadata, node.hostname):
+            self.add_inject(hostname=node.hostname, inject=inject)
 
         mb = Modbus()
         mb.init_xml_root("server", node)

@@ -85,16 +85,16 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"running {target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_background(f"python3 /{target_script_name}")
+                with utils.mm_cc_filter(mm, f"name={target_host}"):
+                    mm.cc_background(f"python3 /{target_script_name}")
 
                 logger.info(f"running {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_background(
-                    f"python3 /{script_name} --ip {target_ip} "
-                    f"--rate {rate} --duration {duration} --probability {prob}"
-                )
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_background(
+                        f"python3 /{script_name} --ip {target_ip} "
+                        f"--rate {rate} --duration {duration} --probability {prob}"
+                    )
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -102,17 +102,17 @@ class TrafficGen(ComponentBase):
 
             if malware:
                 hostname = malware.get("hostname", "malware-gen")
-                rate = background.get("rate", 20)
-                prob = background.get("probability", 1.25)
+                rate = malware.get("rate", 20)
+                prob = malware.get("probability", 1.25)
                 script_name = PurePath(scripts["malwareGen"]).name
 
                 logger.info(f"running {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_background(
-                    f"python3 /{script_name} --ip {target_ip} "
-                    f"--rate {rate} --duration {duration} --probability {prob}"
-                )
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_background(
+                        f"python3 /{script_name} --ip {target_ip} "
+                        f"--rate {rate} --duration {duration} --probability {prob}"
+                    )
             else:
                 logger.info("no malware client configured for target {target_host}")
 
@@ -144,13 +144,13 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"killing {target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_exec(f"pkill -f {target_script_name}")
+                with utils.mm_cc_filter(mm, f"name={target_host}"):
+                    mm.cc_exec(f"pkill -f {target_script_name}")
 
                 logger.info(f"killing {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"pkill -f {script_name}")
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_exec(f"pkill -f {script_name}")
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -162,8 +162,8 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"killing {script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"pkill -f {script_name}")
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_exec(f"pkill -f {script_name}")
             else:
                 logger.info("no malware client configured for target {target_host}")
 
@@ -189,13 +189,13 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"deleting /{target_script_name} on {target_host}")
 
-                mm.cc_filter(f"name={target_host}")
-                mm.cc_exec(f"rm /{target_script_name}")
+                with utils.mm_cc_filter(mm, f"name={target_host}"):
+                    mm.cc_exec(f"rm /{target_script_name}")
 
                 logger.info(f"deleting /{script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"rm /{script_name}")
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_exec(f"rm /{script_name}")
             else:
                 logger.info("no background client configured for target {target_host}")
 
@@ -207,8 +207,8 @@ class TrafficGen(ComponentBase):
 
                 logger.info(f"deleting /{script_name} on {hostname}")
 
-                mm.cc_filter(f"name={hostname}")
-                mm.cc_exec(f"rm /{script_name}")
+                with utils.mm_cc_filter(mm, f"name={hostname}"):
+                    mm.cc_exec(f"rm /{script_name}")
             else:
                 logger.info("no malware client configured for target {target_host}")
 

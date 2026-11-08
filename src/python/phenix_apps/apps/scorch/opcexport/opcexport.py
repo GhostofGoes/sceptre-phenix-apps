@@ -128,11 +128,10 @@ class OPCExport(ComponentBase):
 
         # after python is installed, the PATH variable is updated, but miniccc.exe doesn't pickup the change
         # because the process is still running. Therefore, absolute paths are needed.
-        self.mm.cc_filter(f"name={host}")
-        self.mm.cc_background_once(
-            f"C:/Progra~1/Python38/python.exe C:/opcexport/scada_to_elastic.py -u opc.tcp://{host}:4840 -f /opcexport/opc_variables.json -e {elastic_ip}:{elastic_port}"
-        )
-        self.mm.clear_cc_filter()
+        with utils.mm_cc_filter(self.mm, f"name={host}"):
+            self.mm.cc_background_once(
+                f"C:/Progra~1/Python38/python.exe C:/opcexport/scada_to_elastic.py -u opc.tcp://{host}:4840 -f /opcexport/opc_variables.json -e {elastic_ip}:{elastic_port}"
+            )
 
         # Verify process is still running and didn't error out
         # Hopefully, there are no other python processes running
@@ -169,7 +168,13 @@ class OPCExport(ComponentBase):
         logger.info("Collecting log file for scada_to_elastic.py")
         self.recv_file(host, "/opcexport/scada_to_elastic.log")
         logger.info("Deleting log file")
-        utils.mm_delete_file(self.mm, f"name={host}", "/opcexport/scada_to_elastic.log")
+        # the OPC host is Windows, where the log is deleted with del, not rm
+        utils.mm_delete_file(
+            self.mm,
+            f"name={host}",
+            "/opcexport/scada_to_elastic.log",
+            os_type="windows",
+        )
 
         # TODO: validate that data made it into Elasticsearch
 

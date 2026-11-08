@@ -119,16 +119,9 @@ class PCAP(ComponentBase):
         logger.info(f"Starting user component: {self.name}")
 
         self._check_run_order()
-        for row in self._active_captures():
-            logger.warning(
-                f"another capture is active in this minimega namespace: {row}; "
-                "clearing pcap captures to start ours will stop it. Do not run "
-                "pcap alongside other capture components (mm, tcpdump, erspan)"
-            )
 
-        logger.info("clearing capture on minimega")
-        self.mm.clear_capture("pcap")
-
+        # No `clear capture pcap` here: it would stop every capture in the
+        # namespace, other components' included.
         vms = self.config.vms
         logger.info(f"starting capture for {len(vms)} VMs")
         try:
@@ -499,7 +492,8 @@ def dos_targets_for_run(components: list, run_config: dict) -> list[str]:
     in_run = _stage_names(run_config)
     for comp in components:
         if (
-            comp.type == "disruption"
+            # phenix core defaults an omitted type to the name
+            (comp.get("type") or comp.name) == "disruption"
             and comp.name in in_run
             and comp.metadata.current_disruption in ["dos", "cyber_physical"]
         ):

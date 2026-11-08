@@ -1,3 +1,5 @@
+import os
+import tempfile
 from pathlib import Path
 
 from phenix_apps.apps import AppBase
@@ -48,13 +50,18 @@ class Wireguard(AppBase):
 
             self.add_inject(hostname=hostname, inject=kwargs)
 
-            with path.open("w") as f:
-                utils.mako_serve_template(
-                    "wireguard_config.mako", templates, f, wireguard=vm.metadata
-                )
-
-            # the config contains the interface's private key
-            path.chmod(0o600)
+            # The config holds the interface's private key, so render it into a
+            # new file that is 0600 from creation and move that into place.
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    utils.mako_serve_template(
+                        "wireguard_config.mako", templates, f, wireguard=vm.metadata
+                    )
+                Path(tmp).replace(path)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
 
             if vm.metadata.get("boot", False):
                 path = utils.safe_join(

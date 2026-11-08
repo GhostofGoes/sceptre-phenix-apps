@@ -601,10 +601,16 @@ def mm_cc_send_wait(
     """Send file ``src`` to ``vm`` via cc and wait for it to land.
 
     The filename identifies the invocation, so the ``sent`` column is matched
-    too.
+    too. The cc filter this sets is cleared once the send is queued.
     """
     uuid, host = mm_cc_filter_vm(mm, vm)
-    cmd_id = mm_command_id_for_host(mm.cc_send(src), host)
+
+    try:
+        resp = mm.cc_send(src)
+    finally:
+        mm.clear_cc_filter()
+
+    cmd_id = mm_command_id_for_host(resp, host)
 
     mm_wait_for_cmd(
         mm,
@@ -757,11 +763,18 @@ def mm_exec_wait(
     """Run ``cmd`` on ``vm`` via cc and wait for it to finish.
 
     ``timeout`` bounds the response wait; 0 (the default) waits indefinitely,
-    supervised instead by the client staying registered.
+    supervised instead by the client staying registered. The cc filter this
+    sets is cleared once the command is queued.
     """
     uuid, host = mm_cc_filter_vm(mm, vm, grace=client_grace)
 
-    resp = mm.cc_exec_once(cmd) if once else mm.cc_exec(cmd)
+    # A filter left set would aim every later cc command in the namespace, from
+    # any component or from phenix, at this VM alone.
+    try:
+        resp = mm.cc_exec_once(cmd) if once else mm.cc_exec(cmd)
+    finally:
+        mm.clear_cc_filter()
+
     cmd_id = mm_command_id_for_host(resp, host)
 
     mm_wait_for_cmd(
@@ -1106,6 +1119,27 @@ def _mm_init(namespace: str | None = None) -> minimega.minimega:
     return mm
 
 
+def is_headnode(node: str, mm: minimega.minimega | None = None) -> bool:
+    """Whether minimega host ``node`` is the headnode, as phenix core's
+    Minimega.IsHeadnode decides it: the first host ``mm``'s minimega lists,
+    or else this host, each compared once the names drop the suffixes phenix
+    passes (see :func:`phenix_apps.common.settings.hostname_suffixes`)."""
+    suffixes = phenix_settings.hostname_suffixes()
+
+    def trim(name: str) -> str:
+        for suffix in suffixes:
+            name = name.removesuffix(suffix)
+        return name
+
+    if mm is not None:
+        hosts = mm_host_info(mm)
+
+        if hosts and trim(node) == trim(hosts[0]["name"]):
+            return True
+
+    return trim(node) == trim(socket.gethostname())
+
+
 def mm_compute_cmd(mm: minimega.minimega, **kwargs) -> list[dict]:
     """Send command to compute nodes using minimega API.
 
@@ -1116,14 +1150,17 @@ def mm_compute_cmd(mm: minimega.minimega, **kwargs) -> list[dict]:
             computes: Comma-separated list of compute nodes or 'all'
             command: Command to execute
             command_type: Type of command (default: 'shell')
-            ignore_error: Whether to ignore errors (default: False)
+            ignore_error: Return the responses that hold an error instead of
+                failing on them (default: False)
 
     Returns:
-        List of response dictionaries from minimega
+        List of response dictionaries from minimega, one per host that
+        answered; minimega answers nothing for a host its mesh has no route to
 
     Raises:
         ValueError: If required parameters are missing
-        RuntimeError: If command fails and ignore_error is False
+        RuntimeError: If the command cannot be sent or its reply read, or it
+            fails and ignore_error is False
     """
     # Validate required parameters
     required_params = ["experiment", "computes", "command"]
@@ -1145,11 +1182,8 @@ def mm_compute_cmd(mm: minimega.minimega, **kwargs) -> list[dict]:
     original_namespace = mm._namespace
     mm.namespace(experiment)
 
-    results = []
-
     try:
-        hostname = socket.gethostname().split("-")[0]
-        if len(computes_list) == 1 and hostname in computes_list[0]:
+        if len(computes_list) == 1 and is_headnode(computes_list[0], mm):
             cmd = f"namespace {experiment} {command_type} {command}"
         else:
             cmd = (
@@ -1159,9 +1193,7 @@ def mm_compute_cmd(mm: minimega.minimega, **kwargs) -> list[dict]:
         results = _mm_socket_cmd(cmd, ignore_error=ignore_error)
 
     except Exception as e:
-        if not ignore_error:
-            raise RuntimeError(f"Command failed: {e}") from e
-        logger.warning(f"Command failed (ignored): {e}")
+        raise RuntimeError(f"Command failed: {e}") from e
     finally:
         # Restore original namespace
         if original_namespace:
@@ -1248,22 +1280,18 @@ def _mm_socket_cmd(cmd: str, ignore_error: bool = False) -> list[str]:
     Returns:
         list: List of JSON data elements in the minimega response.
     """
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.connect(phenix_settings.MM_SOCKET_PATH)
-    socketfile = client.makefile("rb")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(phenix_settings.MM_SOCKET_PATH)
+        client.sendall(json.dumps({"Command": f"{cmd}"}).encode("utf-8"))
 
-    msg = json.dumps({"Command": f"{cmd}"})
-    if len(msg) != client.send(msg.encode("utf-8")):
-        logger.error("_socket_cmd(): Failed to write message to minimega")
-        client.close()
-        sys.exit(1)
-    response = _mm_get_response(socketfile)
+        with client.makefile("rb") as socketfile:
+            response = _mm_get_response(socketfile)
+
     if response["Resp"] and response["Resp"][0]["Error"] and not ignore_error:
-        err = response["Resp"][0]["Error"]
-        logger.error(f"_socket_cmd(): Command: '{cmd}' -- Response: '{err}'")
-        client.close()
-        sys.exit(1)
-    client.close()
+        raise RuntimeError(
+            f"minimega command '{cmd}' failed: {response['Resp'][0]['Error']}"
+        )
+
     return response["Resp"]
 
 
@@ -1272,10 +1300,9 @@ def _mm_get_response(socketfile: IO) -> dict:
     _get_response reads a single response from minimega
     """
     line = socketfile.readline().decode("utf-8")
-    response = json.loads(line)
+    response = json.loads(line) if line else None
     if not response:
-        logger.error("_socket_cmd(): Expected response, socket closed")
-        sys.exit(1)
+        raise RuntimeError("minimega closed the socket without a response")
     return response
 
 

@@ -122,10 +122,12 @@ class ERSPAN(ComponentBase):
             self.config.local_interface,
         )
 
-        cmd_out = self._run_mm(cmd_1)
+        # Without the port or the mirror nothing is mirrored, so either failing
+        # fails the stage.
+        cmd_out = self._run_mm(cmd_1, check=True)
         self._log("config_local", "Running Locally", **cmd_out)
 
-        cmd_out = self._run_mm(cmd_2)
+        cmd_out = self._run_mm(cmd_2, check=True)
         self._log("config_local", "Running Locally", **cmd_out)
 
         if self.config.remote_config:
@@ -216,9 +218,10 @@ class ERSPAN(ComponentBase):
 
         logger.info(f"Stopped user component: {self.name}")
 
-    def _run_mm(self, command):
+    def _run_mm(self, command, check: bool = False):
         """
-        Helper to run a command in the minimega container (like ovs commands for example)
+        Helper to run a command in the minimega container (like ovs commands for example).
+        With check, a command that fails raises instead of being only logged.
         """
         try:
             res = self.mm.shell(command)
@@ -229,6 +232,8 @@ class ERSPAN(ComponentBase):
                 "stderr": list(res[0].get("Error", "").splitlines()),
             }
         except Exception as e:
+            if check:
+                raise RuntimeError(f"local command '{command}' failed: {e}") from e
             logger.error(f"Failed to execute local command: {command}. Error: {e}")
             return {
                 "host": "local",

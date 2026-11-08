@@ -127,7 +127,7 @@ class PreStart(FieldDevices, Scada, Stage):
         self.hil_object_list = []
 
         # an ignition hmi needs the provider to sleep first
-        needsleep = bool(self.labelled("ignition"))
+        needsleep = self.has_ignition()
 
         for provider in self.provider_hosts:
             if "metadata" not in provider:

@@ -81,7 +81,8 @@ that it failed. For exit zero, anything passed to STDOUT will be streamed to the
 UI, and for exit non-zero anything passed to STDERR will be streamed to the UI.
 If exit non-zero and `abortOnError` is true, then the component exits as failed.
 If no validator is provided then it is assumed the test succeeded if the atomic
-executor exits cleanly.
+executor exits cleanly. A goart that exits non-zero is logged as an error, and
+fails the component when `abortOnError` is true.
 
 > [!IMPORTANT]
 > Validators run as shell scripts on the phenix host, not in the VM. To lock
@@ -155,3 +156,11 @@ components:
         echo "T1190 ($1) -- Failure" >&2
         exit 1
 ```
+
+## Troubleshooting
+
+| Error | Cause and fix |
+|---|---|
+| `goart not found or not executable at <path> on <vm>. Ensure it is injected via topology.` | No executable goart at `goartPath` (or the default) in the VM. Inject it, or fix `goartPath`. |
+| `goart exited <code> on <vm>: <output>` | goart itself failed, for example on an unknown technique or test. Its output says why. |
+| `String should match pattern` for `goartPath` or `outputPath` | Paths are letters, digits and `_ . / + @ -`, with forward slashes, and may start with a drive letter. |

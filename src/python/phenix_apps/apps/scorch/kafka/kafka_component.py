@@ -1,7 +1,8 @@
 import json
 import os
-import shlex
 import subprocess
+import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Final
@@ -10,6 +11,10 @@ from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.common.logger import logger
 
 LISTENER: Final[Path] = Path(__file__).with_name("kafka_listener.py")
+
+# Seconds configure waits before checking that the listener did not exit at
+# once, on a missing module or an unreachable broker.
+LISTENER_STARTUP_GRACE: Final[float] = 2.0
 
 
 class Kafka(ComponentBase):
@@ -76,32 +81,47 @@ class Kafka(ComponentBase):
         kafka_ips_str = ",".join(kafka_ips)
         topics_str = json.dumps(topics)
 
-        # pass the inputs to the python file (which we execute as a
-        # separate process)
-        arguments = (
-            f"python3 {LISTENER} {csv_bool} '{self.path}' "
-            f"{kafka_ips_str} '{topics_str}' "
-            f"'{self.exp_name}' '{wait_duration_seconds}' {self.component_id}"
-        )
-        command = shlex.split(arguments)
+        # pass the inputs to the python file (which we execute as a separate
+        # process) under this interpreter: it needs kafka-python, which the
+        # python3 on PATH lacks when phenix-apps is installed in a virtualenv
+        command = [
+            sys.executable,
+            str(LISTENER),
+            str(csv_bool),
+            str(self.path),
+            kafka_ips_str,
+            topics_str,
+            self.exp_name,
+            str(wait_duration_seconds),
+            self.component_id,
+        ]
+
+        # the listener outlives this process, so it logs to a file
+        log_path = output_dir / "kafka_listener.log"
+        logger.info(f"Kafka listener log: {log_path}")
 
         try:
-            response = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+            with log_path.open("ab") as log:
+                response = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=True,
+                )
+        except Exception as e:
+            raise RuntimeError(f"Error running listener executable. See: {e}") from e
+
+        time.sleep(LISTENER_STARTUP_GRACE)
+        if (status := response.poll()) is not None:
+            raise RuntimeError(
+                f"kafka listener exited with status {status} right after starting; "
+                f"see {log_path}"
             )
 
-            # write PID to a file so that it can be found
-            # and killed later
-            self._create_pid_file(response.pid)
-
-            # prevents hang
-            response.poll()
-        except Exception as e:
-            logger.error(f"Error running listener executable. See: {e}")
+        # write PID to a file so that it can be found
+        # and killed later
+        self._create_pid_file(response.pid)
 
     def _create_pid_file(self, pid):
         # writes PID to the unique .pid file

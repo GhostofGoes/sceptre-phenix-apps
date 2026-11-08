@@ -381,6 +381,19 @@ class ComponentBase(ExperimentBase):
                         return cmp.get("metadata", None)
         return None
 
+    def is_background(self) -> bool:
+        """Whether the scorch app runs this component's configure and start
+        stages in the background (its `background: true`)."""
+        md = self.extract_app("scorch").get("metadata") or {}
+
+        for cmp in md.get("components") or []:
+            # phenix core defaults an omitted or empty type to the name
+            ctype = cmp.get("type") or cmp.name
+            if cmp.name == self.name and ctype == self.type:
+                return bool(cmp.get("background"))
+
+        return False
+
     def extract_run_name(self) -> str:
         md = self.extract_app("scorch").get("metadata") or {}
         runs = md.get("runs", [])

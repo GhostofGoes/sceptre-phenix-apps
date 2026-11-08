@@ -66,7 +66,7 @@ The record's `end` is the start plus `run_duration`, not the actual stop time
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `collect_iperf` | bool | `false` | Copy the `iperf` component's results into `iperf/` (empty `.log` files removed) and use them in the CSV |
-| `collect_miniccc` | bool | `false` | Copy each VM's miniccc log into `miniccc/` (`/miniccc.log` from Linux VMs except `Router` nodes, `/minimega/miniccc.log` from Windows VMs). Every such VM must be running and have the log |
+| `collect_miniccc` | bool | `false` | Copy each VM's miniccc log into `miniccc/` (`/var/log/miniccc.log`, or else `/miniccc.log`, from Linux VMs except `Router` nodes, `/minimega/miniccc.log` from Windows VMs). Every such VM must be running and have the log |
 | `generate_csv` | bool | `false` | Write `experiment_results.csv` from Elasticsearch (needs `rtds` with `elasticsearch.server` and `elasticsearch.index`) |
 | `pcap_duration_margin` | seconds | `6.0` | How much shorter the merged capture may be than the disruption's `run_duration` before the stage fails |
 
@@ -164,7 +164,7 @@ To check a config before an experiment: `phenix-scorch-validate scenario.yaml`
 | `actual duration of N was less than the configured duration` | The disruption stopped before its `run_duration`. Check its status file. |
 | `Capture duration N seconds is more than 6.0 seconds less than ...` | The merged capture is much shorter than the disruption. Raise `pcap_duration_margin` or fix the capture. |
 | `Non-existent or empty config.ini from provider` | Set `export_config: true` on `rtds`, or make `providerdata` export it. |
-| `error receiving file '/miniccc.log' from VM <vm>` | A VM has no miniccc log or is not running. Turn off `collect_miniccc` or fix the VM. |
+| `no miniccc log in VM <vm> at /var/log/miniccc.log or /miniccc.log` | A Linux VM has no miniccc log or is not running. Turn off `collect_miniccc` or fix the VM. |
 | `the experiment record has no PMUs` | `generate_csv` needs PMUs in the RTDS provider config. |
 | `'generate_csv' is true but 'rtds' component not enabled` | Add `rtds` to the run, or turn `generate_csv` off. |
 

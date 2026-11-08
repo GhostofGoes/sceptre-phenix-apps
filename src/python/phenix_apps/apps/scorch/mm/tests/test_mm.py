@@ -158,12 +158,44 @@ def test_filter_is_quoted_and_reset(tmp_path):
 
     assert mm.calls == [
         ("capture_pcap_filter", "'port 80'"),
+        ("capture_pcap_snaplen", 0),
         ("mesh_send", "all", f"shell mkdir -p {tmp_path}"),
         ("capture_pcap_bridge", "phenix", str(tmp_path / "c.pcap")),
         # match-all, never "": minimega drops an empty argument under a namespace
         ("capture_pcap_filter", "'len >= 0'"),
         ("capture_pcap_snaplen", 0),
     ]
+
+
+def test_capture_without_options_resets_ones_left_in_the_namespace(tmp_path):
+    md = {
+        "vms": [
+            {
+                "hostname": "vm1",
+                "start": [
+                    {
+                        "type": "start_capture",
+                        "capture": {"interface": 0, "filename": "c"},
+                    }
+                ],
+            }
+        ]
+    }
+    mm = FakeMinimega()
+    component = MM.__new__(MM)
+    component.config = parse_metadata(MMMetadata, md, "m")
+    component.base_dir = tmp_path
+    component.mm = mm
+
+    component.start()
+
+    # set before the capture starts: an earlier capture's filter or snaplen
+    # would otherwise apply to this one
+    assert mm.calls[:2] == [
+        ("capture_pcap_filter", "'len >= 0'"),
+        ("capture_pcap_snaplen", 0),
+    ]
+    assert mm.calls[3] == ("capture_pcap_vm", "vm1", "0", str(tmp_path / "c.pcap"))
 
 
 def test_vm_start_capture_default_name_is_checked_up_front():

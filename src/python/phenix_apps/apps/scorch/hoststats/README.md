@@ -17,8 +17,8 @@ stages: start (runs in the background until stop)
 | `start` | Starts sampling every `pollPeriod` seconds and keeps running in the background while the rest of the run goes on. |
 | `stop` | phenix stops the background `start` (SIGTERM); the component writes what it still holds and exits. |
 
-**Without `background: true`, `start` never returns and the run hangs**, because
-the component waits for phenix to stop it.
+Set **`background: true`**: `start` runs until phenix stops it, so without it
+`start` fails at once instead of holding up the run.
 
 ## What you get
 
@@ -104,7 +104,7 @@ To check a config before an experiment: `phenix-scorch-validate scenario.yaml`
 
 | Symptom or error | Cause and fix |
 |---|---|
-| the run never gets past `hoststats` in `start` | `background: true` is missing on the component. |
+| `hoststats component '<name>' must set background: true; its start stage runs until phenix stops it` | `background: true` is missing on the component. Add it, and list the component in `stop`. |
 | `host_stats.jsonl` is missing or empty | Every sample failed (see the next row). The file is written from the first sample on, then every `flushPeriod`. |
 | warning `host stats poll failed, will retry: <error>` | minimega did not answer that sample. Sampling continues; persistent failures mean minimega is down or unreachable. |
 | `pollPeriod: Input should be greater than 0` | `pollPeriod` must be a positive number of seconds. |

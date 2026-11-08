@@ -666,3 +666,5 @@ def test_vms_are_targeted_by_uuid():
     iperf.start()
 
     assert set(filters) == {"uuid=u-srv", "uuid=u-c1", "uuid=u-c2"}
+    # no filter is left to aim later cc commands in the namespace
+    assert iperf._mm.filter == ""

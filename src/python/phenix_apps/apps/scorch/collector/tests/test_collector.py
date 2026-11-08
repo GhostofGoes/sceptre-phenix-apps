@@ -200,10 +200,10 @@ def test_iperf_must_precede_collector_in_stop(run, fails):
         check_iperf_before_collector(comps, Box(run))
 
 
-def test_init_checks_iperf_order(monkeypatch):
+def test_stop_checks_iperf_order_after_parsing_the_config(monkeypatch):
+    # ComponentBase parses self.config in execute_stage, after __init__ ran.
     def fake_base_init(self, name):
-        self.run, self.base_dir = 0, "/x"
-        self.config = CollectorMetadata(collect_iperf=True)
+        self.run, self.base_dir, self.name = 0, "/x", name
         self.extract_app = lambda _: Box(
             metadata={
                 "components": [
@@ -214,7 +214,12 @@ def test_init_checks_iperf_order(monkeypatch):
             }
         )
 
+    def fake_execute_stage(self):
+        self.config = CollectorMetadata(collect_iperf=True)
+        self.stop()
+
     monkeypatch.setattr(ComponentBase, "__init__", fake_base_init)
+    monkeypatch.setattr(ComponentBase, "execute_stage", fake_execute_stage)
     with pytest.raises(ValueError, match="list iperf first"):
         Collector()
 
@@ -231,3 +236,54 @@ def test_csv_ignores_the_old_rtds_key(tmp_path):
             csv_path=tmp_path / "x.csv",
             es_server="",
         )
+
+
+def test_a_run_without_a_loop_and_components_without_a_type():
+    # phenix stores a run without a loop as null, and core defaults an omitted
+    # type to the component's name
+    components = [Box(name="disruption"), Box(name="col", type="collector")]
+    run = Box({"start": ["disruption"], "stop": ["col"], "loop": None})
+
+    enabled = enabled_by_type(components, run)
+
+    assert {t: c.name for t, c in enabled.items()} == {
+        "disruption": "disruption",
+        "collector": "col",
+    }
+    check_iperf_before_collector(components, run)
+
+
+@pytest.mark.parametrize(
+    ("logs", "copied"),
+    [
+        ({"/var/log/miniccc.log"}, "/var/log/miniccc.log"),
+        ({"/miniccc.log"}, "/miniccc.log"),
+    ],
+)
+def test_linux_miniccc_log_is_read_where_the_image_writes_it(logs, copied):
+    c = Collector.__new__(Collector)
+    received = []
+
+    def recv_file(vm, src, dst):
+        if src not in logs:
+            raise RuntimeError(f"error receiving file '{src}' from VM {vm}")
+        received.append(src)
+
+    c.recv_file = recv_file
+    c._recv_linux_miniccc_log("g1", "/x/g1_miniccc.log")
+
+    assert received == [copied]
+
+
+def test_a_missing_linux_miniccc_log_names_both_places():
+    c = Collector.__new__(Collector)
+
+    def recv_file(vm, src, dst):
+        raise RuntimeError(f"error receiving file '{src}' from VM {vm}")
+
+    c.recv_file = recv_file
+
+    with pytest.raises(
+        RuntimeError, match=r"no miniccc log in VM g1 at /var/log/miniccc\.log or "
+    ):
+        c._recv_linux_miniccc_log("g1", "/x/g1_miniccc.log")

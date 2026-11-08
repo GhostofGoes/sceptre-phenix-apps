@@ -145,11 +145,12 @@ class TCPDump(ComponentBase):
             )
 
             utils.mm_cc_filter_vm(self.mm, vm.hostname)
-            if vm.iface != "any":
-                self.mm.cc_exec(f"ip link set {vm.iface} up")
-            self.mm.cc_background(f"bash {launcher}")
-
-        self.mm.clear_cc_filter()
+            try:
+                if vm.iface != "any":
+                    self.mm.cc_exec(f"ip link set {vm.iface} up")
+                self.mm.cc_background(f"bash {launcher}")
+            finally:
+                self.mm.clear_cc_filter()
 
         logger.info(f"Started user component: {self.name}")
 
@@ -182,10 +183,12 @@ class TCPDump(ComponentBase):
             # target the VM explicitly (by UUID, like the helpers above); this
             # used to rely on whichever filter they happened to leave behind
             utils.mm_cc_filter_vm(self.mm, vm.hostname)
-            self.mm.cc_exec(
-                f"rm -f /dump-{vm.iface}.pcap {pidfile} /dump-{vm.iface}.err"
-            )
-            self.mm.clear_cc_filter()
+            try:
+                self.mm.cc_exec(
+                    f"rm -f /dump-{vm.iface}.pcap {pidfile} /dump-{vm.iface}.err"
+                )
+            finally:
+                self.mm.clear_cc_filter()
 
             logger.info(f"done copying PCAP file from node {vm.hostname}")
 

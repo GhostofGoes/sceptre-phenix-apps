@@ -128,8 +128,20 @@ def test_parse_vmstat_names_the_time_column_after_the_timezone():
 
 
 class FakeMinimega:
+    """Records every call, with the cc filter in force."""
+
+    def __init__(self):
+        self.filter = ""
+        self.calls: list[tuple] = []
+
+    def cc_filter(self, f):
+        self.filter = f
+
+    def clear_cc_filter(self):
+        self.filter = ""
+
     def __getattr__(self, name):
-        return lambda *args: None
+        return lambda *args: self.calls.append((name, self.filter, *args))
 
 
 @pytest.mark.parametrize(
@@ -165,6 +177,18 @@ def test_stop_keeps_the_others_when_one_vm_has_no_output(tmp_path, monkeypatch, 
         json.loads(x) for x in (tmp_path / "vm_stats.jsonl").read_text().splitlines()
     ]
     assert [r["vm_name"] for r in records] == ["a", "b"]
+
+    # each VM's file is deleted by name, and every tag is removed though the
+    # stage failed
+    deletes = [c for c in component.mm.calls if c[0] == "cc_exec_once"]
+    assert deletes[1:] == [
+        ("cc_exec_once", f"name={vm}", "rm -f /vmstat.out")
+        for vm in ("a", "broken", "b")
+    ]
+    assert [c for c in component.mm.calls if c[0] == "clear_vm_tag"] == [
+        ("clear_vm_tag", "", vm, "vmstat") for vm in ("a", "broken", "b")
+    ]
+    assert component.mm.filter == ""
 
 
 OLD_VMSTAT = """#!/bin/sh

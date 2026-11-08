@@ -1,7 +1,9 @@
 import csv
 import json
+import re
 import time
 from pathlib import PurePath
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -9,6 +11,14 @@ from phenix_apps.apps.scorch import ComponentBase
 from phenix_apps.apps.scorch.app import Interface
 from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
+
+# Snort's log_tcpdump output names its packet log snort.log.<epoch time>, a new
+# one each time Snort starts.
+PACKET_LOG: Final[re.Pattern[str]] = re.compile(r"snort\.log\.\d+")
+
+# Seconds stop waits for Snort to exit after SIGINT, while it writes its final
+# statistics and flushes its logs, before it copies them anyway.
+EXIT_WAIT: Final[int] = 120
 
 
 class Snort(ComponentBase):
@@ -42,8 +52,8 @@ class Snort(ComponentBase):
 
             logger.info(f"running {script_name} on {hostname}")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec(f"{executor} /{script_name}")
+            with utils.mm_cc_filter(mm, f"name={hostname}"):
+                mm.cc_exec(f"{executor} /{script_name}")
 
         for config in configs:
             src = config["src"]
@@ -57,8 +67,8 @@ class Snort(ComponentBase):
 
         logger.info(f"ensuring {iface} is up in {hostname}")
 
-        mm.cc_filter(f"name={hostname}")
-        mm.cc_exec(f"ip link set {iface} up")
+        with utils.mm_cc_filter(mm, f"name={hostname}"):
+            mm.cc_exec(f"ip link set {iface} up")
 
         logger.info(f"Configured user component: {self.name}")
 
@@ -85,17 +95,16 @@ class Snort(ComponentBase):
 
         logger.info(f"clearing existing Snort logs in {hostname}")
 
-        mm.cc_filter(f"name={hostname}")
-        mm.cc_exec("rm -rf /var/log/snort")
-        mm.cc_exec("mkdir -p /var/log/snort")
+        with utils.mm_cc_filter(mm, f"name={hostname}"):
+            mm.cc_exec("rm -rf /var/log/snort")
+            mm.cc_exec("mkdir -p /var/log/snort")
 
-        logger.info(f"starting Snort in {hostname}")
+            logger.info(f"starting Snort in {hostname}")
 
-        mm.cc_filter(f"name={hostname}")
-        mm.cc_background(
-            f"bash -c 'snort -i {iface} -c /etc/snort/snort.conf"
-            " 2> /var/log/snort/snort.err'"
-        )
+            mm.cc_background(
+                f"bash -c 'snort -i {iface} -c /etc/snort/snort.conf"
+                " 2> /var/log/snort/snort.err'"
+            )
 
         # A bad config, rule or link type makes snort exit within a second or
         # two, and a background command reports nothing back.
@@ -123,10 +132,36 @@ class Snort(ComponentBase):
 
         logger.info(f"stopping Snort in {hostname} (be patient... it may take a while)")
 
-        mm.cc_filter(f"name={hostname}")
-        mm.cc_exec("pkill -INT snort")
+        with utils.mm_cc_filter(mm, f"name={hostname}"):
+            mm.cc_exec("pkill -INT snort")
 
-        logfiles = ["alert", "snort.log", "snort.stats"]
+        # SIGINT makes Snort write its statistics and flush its logs; copying
+        # them before it has exited would get partial or missing files.
+        exited = utils.mm_exec_wait(
+            mm,
+            hostname,
+            f"timeout {EXIT_WAIT} sh -c "
+            "'while pgrep -x snort >/dev/null; do sleep 1; done'",
+        )
+        if exited["exitcode"] != 0:
+            logger.warning(
+                f"Snort is still running in {hostname} {EXIT_WAIT} seconds after "
+                "SIGINT; its logs may be incomplete"
+            )
+
+        listing = self.run_and_check_command(
+            hostname, "ls -1 /var/log/snort", timeout=15.0
+        )
+        packet_logs = sorted(
+            name for name in listing["stdout"].split() if PACKET_LOG.fullmatch(name)
+        )
+        if not packet_logs:
+            raise RuntimeError(
+                f"no snort.log.<time> packet log in /var/log/snort on {hostname}; "
+                "snort.conf needs 'output log_tcpdump: snort.log'"
+            )
+
+        logfiles = ["alert", *packet_logs, "snort.stats"]
 
         for log in logfiles:
             log_path = self.base_dir / log
@@ -164,15 +199,16 @@ class Snort(ComponentBase):
         logger.info(f"Cleaning up user component: {self.name}")
 
         hostname = self.metadata.get("hostname", "detector")
-        logfiles = ["snort.log", "snort.err", "snort.stats"]
+        logfiles = ["snort.log.*", "snort.err", "snort.stats"]
 
         mm = self.mm_init()
 
-        for log in logfiles:
-            logger.info(f"deleting /var/log/snort/{log} from {hostname}")
+        with utils.mm_cc_filter(mm, f"name={hostname}"):
+            for log in logfiles:
+                logger.info(f"deleting /var/log/snort/{log} from {hostname}")
 
-            mm.cc_filter(f"name={hostname}")
-            mm.cc_exec(f"rm /var/log/snort/{log}")
+                # a shell expands the packet logs' glob
+                mm.cc_exec(f"bash -c 'rm -f /var/log/snort/{log}'")
 
         logger.info(f"Cleaned up user component: {self.name}")
 

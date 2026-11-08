@@ -160,6 +160,16 @@ def test_dos_targets_loop_null_and_nested_loops():
     assert dos_targets_for_run([comp], nested) == ["x"]
 
 
+def test_dos_targets_from_a_disruption_without_a_type():
+    # phenix core defaults an omitted type to the name
+    comp = Box(
+        name="disruption",
+        metadata={"current_disruption": "dos", "dos": {"targets": [{"hostname": "x"}]}},
+    )
+
+    assert dos_targets_for_run([comp], {"start": ["disruption"]}) == ["x"]
+
+
 def test_run_order_warnings():
     comps = [Box(name="pcap"), Box(name="c", type="collector")]
 
@@ -249,7 +259,6 @@ def test_start_applies_per_vm_options_then_resets_them(tmp_path):
     comp.start()
 
     assert mm.calls == [
-        ("clear", "pcap"),
         ("filter", "'port 80'"),
         ("snaplen", 128),
         ("capture", "aa", 0),
@@ -261,6 +270,20 @@ def test_start_applies_per_vm_options_then_resets_them(tmp_path):
         ("filter", "'len >= 0'"),
         ("snaplen", 0),
     ]
+
+
+def test_start_leaves_other_components_captures_running(tmp_path):
+    mm = FakeMM([["1", "vm", "h2:0", "/phenix/mm/h2.pcap"]])
+    comp = component(mm)
+    comp.name, comp.base_dir = "pcap", tmp_path
+    comp._check_run_order = lambda: None
+    comp.get_host_and_iface = lambda cfg: (cfg["hostname"], cfg["interface"])
+    comp.config = PCAPMetadata.model_validate({"vms": [{"hostname": "h1"}]})
+
+    comp.start()
+
+    assert ("clear", "pcap") not in mm.calls
+    assert ("capture", "h1", 0) in mm.calls
 
 
 @pytest.mark.parametrize("bad", ["a\\b", "a#b", "it's", 'say "x"', "a\nb"])

@@ -42,6 +42,14 @@ class HostStats(ComponentBase):
     def start(self):
         logger.info(f"Starting user component: {self.name}")
 
+        # start waits for the SIGTERM phenix sends only to a background
+        # component, so in the foreground it would hold up the run forever
+        if not self.is_background():
+            raise ValueError(
+                f"hoststats component '{self.name}' must set background: true; "
+                "its start stage runs until phenix stops it"
+            )
+
         thread = threading.Thread(target=self.__run_monitor)
         thread.start()
 

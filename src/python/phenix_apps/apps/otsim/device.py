@@ -3,12 +3,34 @@ import lxml.etree as ET
 from phenix_apps.apps.otsim.infrastructure import merge_infrastructure_with_default
 from phenix_apps.apps.otsim.protocols.dnp3 import DNP3
 from phenix_apps.apps.otsim.protocols.modbus import Modbus
+from phenix_apps.common.error import AppError
+
+# Modbus data type for analog points whose infrastructure mapping sets none.
+DEFAULT_ANALOG_DATA_TYPE = "int32"
+
+# The protocols a FEP can serve its polled points over.
+DOWNSTREAM_PROTOCOLS = ("dnp3", "modbus")
+
+
+def protocol_md(variable, proto):
+    """The settings `proto` uses for an infrastructure variable."""
+    # YAML `modbus:` with every setting commented out is null.
+    md = variable.get(proto) or {}
+
+    if proto == "modbus" and variable["type"] in ("analog-read", "analog-read-write"):
+        # OT-sim's uint16 default corrupts negative values and anything above
+        # 655.35 at scaling 2.
+        md = {"data-type": DEFAULT_ANALOG_DATA_TYPE, **md}
+
+    return md
 
 
 class Register:
     """One protocol register. `device`, `device_type`, `variable` and
     `protocol` record where an infrastructure register came from so other
-    apps can give its point a meaningful name."""
+    apps can give its point a meaningful name; `var_type` is that variable's
+    infrastructure mapping, so a FEP can serve the point over another protocol
+    with that protocol's settings."""
 
     def __init__(
         self,
@@ -19,6 +41,7 @@ class Register:
         device_type=None,
         variable=None,
         protocol=None,
+        var_type=None,
     ):
         if md is None:
             md = {}
@@ -29,6 +52,20 @@ class Register:
         self.device_type = device_type
         self.variable = variable
         self.protocol = protocol
+        self.var_type = var_type if var_type is not None else {"type": typ}
+
+    def for_protocol(self, proto):
+        """This point with the settings `proto` uses for it."""
+        return Register(
+            self.type,
+            self.tag,
+            protocol_md(self.var_type, proto),
+            device=self.device,
+            device_type=self.device_type,
+            variable=self.variable,
+            protocol=self.protocol,
+            var_type=self.var_type,
+        )
 
 
 class Device:
@@ -39,6 +76,7 @@ class Device:
         self.md = node.get("metadata", {})
         self.infra = self.md.get("infrastructure", default_infra)
 
+        # The points the device serves, by protocol: what its clients poll.
         self.registers = {}
         self.processed = False
         self.configs = configs
@@ -49,6 +87,22 @@ class FEP(Device):
         if configs is None:
             configs = {}
         Device.__init__(self, node, configs)
+
+        downstream = self.md.get("downstream") or []
+
+        if not isinstance(downstream, list):
+            downstream = [downstream]
+
+        unknown = [proto for proto in downstream if proto not in DOWNSTREAM_PROTOCOLS]
+        if unknown:
+            raise AppError(
+                f"ot-sim: fep '{node['hostname']}' sets downstream "
+                f"{', '.join(repr(proto) for proto in unknown)}, but a fep serves "
+                f"only {' and '.join(DOWNSTREAM_PROTOCOLS)}"
+            )
+
+        # Default to using DNP3 for downstream side.
+        self.downstream = downstream or ["dnp3"]
 
     def process(self, devices):
         if self.processed:
@@ -64,6 +118,8 @@ class FEP(Device):
         # now, all registers available upstream are made available downstream. Users
         # may want to only make a subset of registers available downstream.
 
+        polled = {}
+
         # Support legacy `connected_rtus` key if `upstream` key is not present.
         for name in self.md.get("upstream", self.md.get("connected_rtus", [])):
             device = devices[name]
@@ -72,10 +128,21 @@ class FEP(Device):
             device.process(devices)
 
             for proto, regs in device.registers.items():
-                if proto not in self.registers:
-                    self.registers[proto] = []
+                polled.setdefault(proto, []).extend(regs)
 
-                self.registers[proto] += regs
+        # Serve each tag once: an upstream fep serves every point over each of
+        # its downstream protocols, and a device may list a point under more
+        # than one.
+        registers = []
+        tags = set()
+        for reg in (reg for regs in polled.values() for reg in regs):
+            if reg.tag not in tags:
+                tags.add(reg.tag)
+                registers.append(reg)
+
+        for proto in DOWNSTREAM_PROTOCOLS:
+            if proto in self.downstream:
+                self.registers[proto] = [reg.for_protocol(proto) for reg in registers]
 
         self.processed = True
 
@@ -88,7 +155,13 @@ class FEP(Device):
 
             if "modbus" in device.registers:
                 client = Modbus()
-                client.init_xml_root("client", device.node)
+                # OT-sim's Modbus server ignores statuses, and its client
+                # updates, from a sender with its own name, so a client sharing
+                # the server's default name would neither feed the server nor get
+                # the writes it receives.
+                client.init_xml_root(
+                    "client", device.node, name=f"modbus-client-{upstream}"
+                )
                 client.registers_to_xml(device.registers["modbus"])
 
                 config.append_to_root(client.root)
@@ -96,36 +169,29 @@ class FEP(Device):
 
             if "dnp3" in device.registers:
                 client = DNP3()
-                client.init_xml_root("client", device.node)
+                # Each client publishes `<name>.connected`.
+                client.init_xml_root(
+                    "client", device.node, name=f"dnp3-client-{upstream}"
+                )
                 client.init_master_xml(self.configs.get("scan-rate"))
                 client.registers_to_xml(device.registers["dnp3"])
 
                 config.append_to_root(client.root)
                 protos["dnp3"] = True
 
-        registers = []
-        for regs in self.registers.values():
-            registers += regs
-
-        downstream = self.md.get("downstream", [])
-
-        if not isinstance(downstream, list):
-            downstream = [downstream]
-
-        # Default to using DNP3 for downstream side.
-        if not downstream or "dnp3" in downstream:
+        if "dnp3" in self.registers:
             server = DNP3()
             server.init_xml_root("server", self.node)
             server.init_outstation_xml()
-            server.registers_to_xml(registers)
+            server.registers_to_xml(self.registers["dnp3"])
 
             config.append_to_root(server.root)
             protos["dnp3"] = True
 
-        if "modbus" in downstream:
+        if "modbus" in self.registers:
             server = Modbus()
             server.init_xml_root("server", self.node)
-            server.registers_to_xml(registers)
+            server.registers_to_xml(self.registers["modbus"])
 
             config.append_to_root(server.root)
             protos["modbus"] = True
@@ -188,11 +254,12 @@ class FieldDeviceServer(Device):
                     reg = Register(
                         var_type["type"],
                         f"{name}.{var}",
-                        var_type.get("dnp3", {}),
+                        protocol_md(var_type, "dnp3"),
                         device=name,
                         device_type=fd["type"],
                         variable=var,
                         protocol="dnp3",
+                        var_type=var_type,
                     )
                     self.registers["dnp3"].append(reg)
 
@@ -228,11 +295,12 @@ class FieldDeviceServer(Device):
                     reg = Register(
                         var_type["type"],
                         f"{name}.{var}",
-                        var_type.get("modbus", {}),
+                        protocol_md(var_type, "modbus"),
                         device=name,
                         device_type=fd["type"],
                         variable=var,
                         protocol="modbus",
+                        var_type=var_type,
                     )
                     self.registers["modbus"].append(reg)
 
@@ -287,9 +355,13 @@ class FieldDeviceClient(Device):
         for downstream in self.md.get("connected_rtus", []):
             device = known[downstream]
 
+            # Each client publishes `<name>.connected`, so each polled device
+            # gets clients of its own name.
             if "modbus" in device.registers:
                 client = Modbus()
-                client.init_xml_root("client", device.node)
+                client.init_xml_root(
+                    "client", device.node, name=f"modbus-client-{downstream}"
+                )
                 client.registers_to_xml(device.registers["modbus"])
 
                 config.append_to_root(client.root)
@@ -297,7 +369,9 @@ class FieldDeviceClient(Device):
 
             if "dnp3" in device.registers:
                 client = DNP3()
-                client.init_xml_root("client", device.node)
+                client.init_xml_root(
+                    "client", device.node, name=f"dnp3-client-{downstream}"
+                )
                 client.init_master_xml(self.configs.get("scan-rate"))
                 client.registers_to_xml(device.registers["dnp3"])
 

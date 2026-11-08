@@ -209,22 +209,27 @@ def _capture_file(name: str, *, default: bool = False) -> str:
     return name
 
 
+# The filter and snaplen are namespace-wide and copied into each capture when
+# it starts. With no argument these commands only print the current value, so
+# "no filter" is a match-all filter, and "no snaplen" is 0, which minimega reads
+# as its 1600-byte default. The filter cannot be "": phenix runs commands under
+# "namespace <ns>", which rebuilds the command text and drops the empty
+# argument, so the old filter would stick.
+MATCH_ALL_FILTER: Final[str] = "'len >= 0'"
+
+
 def _set_capture_options(mm, cap: StartBridgeCapture | StartVMCapture) -> None:
-    if cap.filter:
+    # A capture without its own filter or snaplen gets the defaults, not
+    # whatever another capture left set in the namespace.
+    mm.capture_pcap_filter(
         # minimega reads the filter as one argument only when quoted
-        mm.capture_pcap_filter(f"'{utils._validate_mm_filter(cap.filter)}'")
-    if cap.snaplen:
-        mm.capture_pcap_snaplen(cap.snaplen)
+        f"'{utils._validate_mm_filter(cap.filter)}'" if cap.filter else MATCH_ALL_FILTER
+    )
+    mm.capture_pcap_snaplen(cap.snaplen or 0)
 
 
 def _reset_capture_options(mm) -> None:
-    # The filter and snaplen are namespace-wide and copied into each capture
-    # when it starts. With no argument these commands only print the current
-    # value, so clear them explicitly: a match-all filter, and snaplen 0, which
-    # minimega reads as its 1600-byte default. The filter cannot be "": phenix
-    # runs commands under "namespace <ns>", which rebuilds the command text and
-    # drops the empty argument, so the old filter would stick.
-    mm.capture_pcap_filter("'len >= 0'")
+    mm.capture_pcap_filter(MATCH_ALL_FILTER)
     mm.capture_pcap_snaplen(0)
 
 
