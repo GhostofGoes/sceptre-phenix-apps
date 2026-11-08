@@ -143,8 +143,8 @@ To check a config before an experiment: `phenix-scorch-validate scenario.yaml`
 | Error | Cause and fix |
 |---|---|
 | `no VLANs left to mirror: the experiment has no VLANs, or excluded_vlans names all of them` | Nothing would be mirrored (an empty selection would make OVS mirror everything). Exclude fewer VLANs. |
-| local `ovs-vsctl: no bridge named <name>` | `local_bridge` is not the experiment's bridge. Check the bridge name (`ovs-vsctl list-br` on the phenix host). |
-| local `... because a port named erspan1 already exists ...` | A previous run's `cleanup` did not run. Run it, or `ovs-vsctl del-port <bridge> erspan1` on the phenix host. |
+| `local command 'ovs-vsctl add-port ...' failed: ... no bridge named <name>` | `local_bridge` is not the experiment's bridge. Check the bridge name (`ovs-vsctl list-br` on the phenix host). |
+| `local command 'ovs-vsctl add-port ...' failed: ... because a port named erspan1 already exists ...` | A previous run's `cleanup` did not run. Run it, or `ovs-vsctl del-port <bridge> erspan1` on the phenix host. |
 | `Remote command failed (exit code 1): sudo: a terminal is required to read the password ...` | `user` needs passwordless `sudo` on the receiver for `ip`, `ovs-vsctl` and `ovs-ofctl`. |
 | `Remote command failed (exit code 2): RTNETLINK answers: File exists` | In `configure`: `remote_interface` already exists on the receiver, from a run without `cleanup` or a `configure` that failed halfway. Run `cleanup`, or `sudo ip link del erspan1` there. |
 | `Remote command failed ...` from `ovs-vsctl` or `ovs-ofctl` (in `configure`) | `remote_bridge` does not exist on the receiver, or OVS is not running there. The interface was already created; run `cleanup` before retrying. |
@@ -158,9 +158,11 @@ To check a config before an experiment: `phenix-scorch-validate scenario.yaml`
 
 ## Limitations
 
-- A failed local command is logged as an error and recorded in
-  `erspan_metadata_<stage>.json`, but does not fail the stage. A failed remote
-  command does.
+- A failed local command fails `configure`. In `cleanup` it is only logged as
+  an error, so the rest of the cleanup still runs; a failed remote command
+  fails either stage.
+- A `configure` whose mirror fails leaves the tunnel port on the bridge: run
+  `cleanup` before trying again.
 - A `configure` that fails on the receiver leaves the phenix side set up: run
   `cleanup` before trying again.
 - Without `ssh_timeout`, SSH has no timeouts. The receiver's host key is

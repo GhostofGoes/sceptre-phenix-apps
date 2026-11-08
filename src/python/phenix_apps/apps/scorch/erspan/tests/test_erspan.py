@@ -239,3 +239,49 @@ def test_ssh_timeout_reaches_paramiko(monkeypatch):
     component, ssh = remote(monkeypatch, [0], timeout=7)
     component._run_remote_commands(["a"], "config_remote")
     assert ssh.timeouts == [7, 7]
+
+
+class FailingShell:
+    """minimega's shell, failing every command that names a bridge."""
+
+    def __init__(self):
+        self.commands = []
+
+    def shell(self, command):
+        self.commands.append(command)
+        if "e2e-nobr" in command:
+            raise RuntimeError("ovs-vsctl: no bridge named e2e-nobr")
+        return [{"Host": "head", "Response": "", "Error": ""}]
+
+
+def missing_bridge(tmp_path) -> ERSPAN:
+    component = erspan({"LAN": 100}, [])
+    component.name = "ersbad"
+    component.base_dir = tmp_path
+    component.erspan_metadata = []
+    component.config = ERSPANMetadata.model_validate(
+        {**BASE, "local_bridge": "e2e-nobr"}
+    )
+    component.mm = FailingShell()
+    return component
+
+
+def test_a_failed_local_command_fails_configure(tmp_path):
+    component = missing_bridge(tmp_path)
+
+    with pytest.raises(
+        RuntimeError, match=r"^local command 'ovs-vsctl add-port e2e-nobr "
+    ):
+        component.configure()
+
+    # the mirror is never added once the port failed
+    assert not any("create Mirror" in c for c in component.mm.commands)
+
+
+def test_a_failed_local_command_is_only_logged_in_cleanup(tmp_path):
+    component = missing_bridge(tmp_path)
+
+    component.cleanup()
+
+    assert len(component.mm.commands) == 2
+    assert (tmp_path / "erspan_metadata_cleanup.json").is_file()
