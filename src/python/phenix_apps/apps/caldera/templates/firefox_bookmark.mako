@@ -1,5 +1,6 @@
 {
   "policies": {
+    "SkipTermsOfUse": true,
     "Bookmarks": [
       {
         "Title": "Caldera",

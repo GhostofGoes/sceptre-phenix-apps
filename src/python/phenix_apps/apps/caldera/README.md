@@ -34,3 +34,10 @@ spec:
           server: mallory:0 # will default to interface 0 if ':<idx>' isn't provided
                             # can also be an IP address (for external server)
 ```
+
+In pre-start, the app also injects two files into each server for root's
+desktop session: `/root/.config/autostart/Caldera.desktop`, which opens Caldera
+in Firefox, and `/etc/firefox/policies/policies.json`, which replaces the
+image's Firefox policies. That policy file adds a Caldera bookmark to the
+toolbar and sets `SkipTermsOfUse`, which accepts Mozilla's Terms of Use so that
+Firefox does not cover Caldera with its Terms of Use dialog.
