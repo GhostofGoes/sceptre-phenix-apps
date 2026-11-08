@@ -102,8 +102,8 @@ class TrafficGen(ComponentBase):
 
             if malware:
                 hostname = malware.get("hostname", "malware-gen")
-                rate = background.get("rate", 20)
-                prob = background.get("probability", 1.25)
+                rate = malware.get("rate", 20)
+                prob = malware.get("probability", 1.25)
                 script_name = PurePath(scripts["malwareGen"]).name
 
                 logger.info(f"running {script_name} on {hostname}")
