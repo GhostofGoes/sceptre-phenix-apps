@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 from box import Box
 
-from phenix_apps.common import utils
+from phenix_apps.common import settings, utils
 from phenix_apps.common.base import ExperimentBase
 from phenix_apps.common.logger import configure_logging, logger
 
@@ -70,8 +70,9 @@ class AppBase(ExperimentBase):
 
         dryrun = args.dry_run or os.getenv("PHENIX_DRYRUN", "false") == "true"
 
-        # Configure logger. In dry-run mode, force console output.
-        configure_logging(force_console=dryrun)
+        # A local dry run logs human-readable lines to the console, but phenix
+        # passes PHENIX_LOG_FILE=stderr to dry runs too and reads JSON from it.
+        configure_logging(force_console=dryrun and settings.PHENIX_LOG_FILE != "stderr")
 
         app = cls(name, args.stage, dryrun)
         app.execute_stage()

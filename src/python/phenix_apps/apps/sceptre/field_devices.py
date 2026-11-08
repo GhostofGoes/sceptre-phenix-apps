@@ -52,7 +52,7 @@ class FieldDevices(PreStartState):
         self.fdlist = {}
         self.power_object_list = []
 
-        needrestart = bool(self.hosts("ignition"))
+        needrestart = self.has_ignition()
 
         for fd_counter, fd_ in enumerate(self.hosts("fd-server"), start=1):
             if not fd_.metadata:

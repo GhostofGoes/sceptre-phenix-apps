@@ -53,9 +53,12 @@ class Caldera(AppBase):
                     "proto": "static",
                     "address": str(ip.ip),
                     "mask": ip.network.prefixlen,
-                    "gateway": iface.gateway,
                     "vlan": iface.vlan,
                 }
+
+                # phenix allows one gateway per node, and its schema has no null.
+                if iface.get("gateway"):
+                    interface["gateway"] = iface.gateway
 
                 node["network"]["interfaces"].append(interface)
 

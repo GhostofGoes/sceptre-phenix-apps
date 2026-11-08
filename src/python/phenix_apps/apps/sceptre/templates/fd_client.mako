@@ -80,7 +80,7 @@ else:
             % endfor
             % if proto.protocol == 'dnp3' or proto.protocol == 'dnp3-serial':
                 </dnp3-connection>
-            % elif proto.protocol == 'modbus':
+            % elif proto.protocol == 'modbus' or proto.protocol == 'modbus-serial':
                 </modbus-connection>
             % elif proto.protocol == 'bacnet':
                 </bacnet-connection>
@@ -96,7 +96,7 @@ else:
             </dnp3-client>
     % elif protocol == 'modbus' or protocol == 'modbus-serial':
                 <command-interface>tcp://${command_endpoint}:1331</command-interface>
-            </modbus-tcp-client>
+            </modbus-client>
     % elif protocol == 'bacnet':
                 <command-interface>tcp://${command_endpoint}:1332</command-interface>
             </bacnet-client>
