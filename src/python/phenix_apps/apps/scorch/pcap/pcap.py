@@ -492,7 +492,8 @@ def dos_targets_for_run(components: list, run_config: dict) -> list[str]:
     in_run = _stage_names(run_config)
     for comp in components:
         if (
-            comp.type == "disruption"
+            # phenix core defaults an omitted type to the name
+            (comp.get("type") or comp.name) == "disruption"
             and comp.name in in_run
             and comp.metadata.current_disruption in ["dos", "cyber_physical"]
         ):

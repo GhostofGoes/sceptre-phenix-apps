@@ -160,6 +160,16 @@ def test_dos_targets_loop_null_and_nested_loops():
     assert dos_targets_for_run([comp], nested) == ["x"]
 
 
+def test_dos_targets_from_a_disruption_without_a_type():
+    # phenix core defaults an omitted type to the name
+    comp = Box(
+        name="disruption",
+        metadata={"current_disruption": "dos", "dos": {"targets": [{"hostname": "x"}]}},
+    )
+
+    assert dos_targets_for_run([comp], {"start": ["disruption"]}) == ["x"]
+
+
 def test_run_order_warnings():
     comps = [Box(name="pcap"), Box(name="c", type="collector")]
 

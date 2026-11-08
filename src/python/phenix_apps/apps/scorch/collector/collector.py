@@ -2,6 +2,7 @@ import configparser
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Final
 
 import yaml
 
@@ -16,6 +17,10 @@ from .csv_gen import gen_csv
 # TODO: migrate CSV generation functionality to harmonize (csv_gen.py)
 # TODO: configuration option to specify what components to collect from explicitly
 # TODO: extend the stop-order check to the other components it collects from
+
+# phenix-built images log miniccc to /var/log/miniccc.log; /miniccc.log is the
+# fallback for images built otherwise.
+LINUX_MINICCC_LOGS: Final[tuple[str, ...]] = ("/var/log/miniccc.log", "/miniccc.log")
 
 
 class CollectorMetadata(MetadataBlock):
@@ -44,7 +49,7 @@ class Collector(ComponentBase):
         # Determine what scorch components are enabled, and enable lookups
         # by component type (for cases when name and type differ).
         components = self.extract_app("scorch").metadata.components
-        self.all_components = {c.type: c for c in components}
+        self.all_components = {_ctype(c): c for c in components}
         self.run_config = self.extract_app("scorch").metadata.runs[self.run]
         self.enabled_components = enabled_by_type(components, self.run_config)
         if self.config.collect_iperf:
@@ -103,7 +108,7 @@ class Collector(ComponentBase):
                 if os_type == "windows":
                     self.recv_file(vm, "/minimega/miniccc.log", m_dest)
                 elif os_type == "linux" and self.require_node(vm).type != "Router":
-                    self.recv_file(vm, "/miniccc.log", m_dest)
+                    self._recv_linux_miniccc_log(vm, m_dest)
 
         # iperf: client, server, histograms
         iperf_dest = None
@@ -450,6 +455,21 @@ class Collector(ComponentBase):
 
         return pcap_metadata
 
+    def _recv_linux_miniccc_log(self, vm: str, dst: str) -> None:
+        """Copy a Linux VM's miniccc log from the first place images write it."""
+        errors = []
+        for src in LINUX_MINICCC_LOGS:
+            try:
+                self.recv_file(vm, src, dst)
+                return
+            except RuntimeError as ex:
+                errors.append(str(ex))
+
+        raise RuntimeError(
+            f"no miniccc log in VM {vm} at {' or '.join(LINUX_MINICCC_LOGS)}: "
+            + "; ".join(errors)
+        )
+
     def _comp_dir(self, component_type: str) -> Path:
         """
         NOTE: the output dir is the components *name*, not the *type*.
@@ -518,13 +538,13 @@ def enabled_by_type(components: list, run_config) -> dict:
     """
 
     stages = [s for s in run_config.values() if isinstance(s, list)]
-    stages += [s for s in run_config.get("loop", {}).values() if isinstance(s, list)]
+    stages += [s for s in _loop(run_config).values() if isinstance(s, list)]
     used = {name for stage in stages for name in stage}
 
     enabled: dict = {}
     for comp in components:
         if comp.name in used:
-            enabled.setdefault(comp.type, comp)
+            enabled.setdefault(_ctype(comp), comp)
     return enabled
 
 
@@ -532,8 +552,8 @@ def check_iperf_before_collector(components: list, run_config) -> None:
     """iperf writes its results in `stop`, so with `collect_iperf` it must be
     listed before the collector in every `stop` list that has both."""
 
-    types = {c.name: c.type for c in components}
-    stops = [run_config.get("stop") or [], run_config.get("loop", {}).get("stop") or []]
+    types = {c.name: _ctype(c) for c in components}
+    stops = [run_config.get("stop") or [], _loop(run_config).get("stop") or []]
     for stop in stops:
         kinds = [types.get(n) for n in stop]
         if "collector" in kinds and "iperf" in kinds:
@@ -544,6 +564,19 @@ def check_iperf_before_collector(components: list, run_config) -> None:
                     f"'collector' in the stop stage {stop}: the collector would "
                     "copy iperf's results before they are written; list iperf first"
                 )
+
+
+def _ctype(component) -> str:
+    """A component's type; phenix core defaults an omitted or empty one to the
+    component's name."""
+
+    return component.get("type") or component.name
+
+
+def _loop(run_config) -> dict:
+    """A run's nested loop; phenix stores a run without one as null."""
+
+    return run_config.get("loop") or {}
 
 
 def _utc_time(text: str, source: str) -> datetime:
