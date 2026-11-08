@@ -11,7 +11,7 @@ stages: start, stop
 | Stage | What it does |
 |---|---|
 | `start` | Tags each chosen VM `vmstat=1` and starts `vmstat -n -t <pollPeriod>` in the background in each Linux VM, appending to `/vmstat.out` in the VM. Does not wait for `vmstat` to start or finish; the stage ends once the commands are sent. |
-| `stop` | Stops `vmstat` on each VM, waits `stopWait` seconds, copies each VM's `/vmstat.out` back, deletes it from the VMs, and writes every sample to `vm_stats.jsonl`. |
+| `stop` | Stops `vmstat` on each VM, waits `stopWait` seconds, copies each VM's `/vmstat.out` back, deletes it from the VMs, writes every sample to `vm_stats.jsonl`, and removes the `vmstat` tag from each VM, even when an earlier step failed. |
 
 List it in both `start` and `stop` of the run. It does not need
 `background: true`: `start` does not wait for `vmstat`.

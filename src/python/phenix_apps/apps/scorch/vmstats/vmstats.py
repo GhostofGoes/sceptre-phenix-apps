@@ -135,55 +135,66 @@ class VMStats(ComponentBase):
 
         vms = self.__vm_list()
 
-        logger.info("killing vmstat processes")
-        utils.mm_kill_process(self.mm, "vmstat=1 os=linux", "vmstat")
+        try:
+            logger.info("killing vmstat processes")
+            utils.mm_kill_process(self.mm, "vmstat=1 os=linux", "vmstat")
 
-        time.sleep(self.config.stopWait)
+            time.sleep(self.config.stopWait)
 
-        # Collect every VM that has its file before failing for the ones that
-        # do not, so one missing VM does not lose everyone else's stats.
-        collected, failed = [], {}
-        for i, vm in enumerate(vms):
-            logger.info(f"transferring /vmstat.out from {vm} ({i + 1} of {len(vms)})")
-            try:
-                utils.mm_recv(
-                    self.mm, vm, "/vmstat.out", str(self.base_dir / f"{vm}.out")
+            # Collect every VM that has its file before failing for the ones that
+            # do not, so one missing VM does not lose everyone else's stats.
+            collected, failed = [], {}
+            for i, vm in enumerate(vms):
+                logger.info(
+                    f"transferring /vmstat.out from {vm} ({i + 1} of {len(vms)})"
                 )
-                collected.append(vm)
-            except (ValueError, RuntimeError) as ex:
-                # ValueError: no file; RuntimeError: VM down or miniccc never
-                # registered
-                logger.error(f"Failed to get vmstat.out from {vm}: {ex}")
-                failed[vm] = str(ex)
+                try:
+                    utils.mm_recv(
+                        self.mm, vm, "/vmstat.out", str(self.base_dir / f"{vm}.out")
+                    )
+                    collected.append(vm)
+                except (ValueError, RuntimeError) as ex:
+                    # ValueError: no file; RuntimeError: VM down or miniccc never
+                    # registered
+                    logger.error(f"Failed to get vmstat.out from {vm}: {ex}")
+                    failed[vm] = str(ex)
 
-        logger.info("deleting vmstat.out from VMs")
-        self.mm.cc_filter("vmstat=1 os=linux")
-        self.mm.cc_exec_once("rm /vmstat.out")
-        self.mm.clear_cc_filter()
+            # By name, not by tag: minimega matches a command's filter as it hands
+            # the command to each client, after queuing returns, so removing the
+            # tags below could make an rm aimed at them miss a VM.
+            logger.info("deleting vmstat.out from VMs")
+            for vm in vms:
+                utils.mm_delete_file(self.mm, f"name={vm}", "/vmstat.out")
 
-        stats = []
+            stats = []
 
-        logger.info("reading vmstat.out files")
-        for vm in collected:
-            vm_stats, skipped = parse_vmstat(
-                (self.base_dir / f"{vm}.out").read_text(), vm
-            )
-            if skipped:
-                logger.warning(f"skipped {skipped} unreadable line(s) from {vm}")
-            stats.extend(vm_stats)
+            logger.info("reading vmstat.out files")
+            for vm in collected:
+                vm_stats, skipped = parse_vmstat(
+                    (self.base_dir / f"{vm}.out").read_text(), vm
+                )
+                if skipped:
+                    logger.warning(f"skipped {skipped} unreadable line(s) from {vm}")
+                stats.extend(vm_stats)
 
-        stats_path = self.base_dir / "vm_stats.jsonl"
-        logger.info(f"writing consolidated vmstats to {stats_path}")
-        with stats_path.open("a+") as f:
-            for datum in stats:
-                json_record = json.dumps(datum)
-                f.write(json_record + "\n")
+            stats_path = self.base_dir / "vm_stats.jsonl"
+            logger.info(f"writing consolidated vmstats to {stats_path}")
+            with stats_path.open("a+") as f:
+                for datum in stats:
+                    json_record = json.dumps(datum)
+                    f.write(json_record + "\n")
 
-        if failed:
-            raise RuntimeError(
-                f"no vmstat.out from {len(failed)} VM(s) (the others were "
-                f"collected): {', '.join(sorted(failed))}"
-            )
+            if failed:
+                raise RuntimeError(
+                    f"no vmstat.out from {len(failed)} VM(s) (the others were "
+                    f"collected): {', '.join(sorted(failed))}"
+                )
+        finally:
+            # start tagged each VM; a tag left behind would select it for the
+            # commands of a later run's vmstats too
+            logger.info("removing the vmstat tag from VMs")
+            for vm in vms:
+                self.mm.clear_vm_tag(vm, "vmstat")
 
         logger.info(f"Stopped user component: {self.name}")
 
