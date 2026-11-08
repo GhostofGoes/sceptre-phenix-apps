@@ -143,6 +143,7 @@ Most environment variables are read in
 | `MM_FILEPATH`, `MM_SOCKET_PATH` | minimega file root and command socket |
 | `PHENIX_CC_*` | miniccc polling rates and timeout grace periods |
 | `PHENIX_SCORCH_HOST_VALIDATORS` | Literal `0` stops the SCORCH `art` and `cc` validators and the `pipe` `via` from running scenario-supplied commands on the host; on otherwise |
+| `PHENIX_HOSTNAME_SUFFIXES` | Host name suffixes phēnix passes apps and components; `is_headnode` trims them (unset: `-minimega,-phenix`; empty: none) |
 
 Read elsewhere: `PHENIX_DRYRUN` (literal `true`) in
 `src/python/phenix_apps/apps/__init__.py`,

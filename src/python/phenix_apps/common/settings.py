@@ -52,3 +52,22 @@ CC_LOG_MAX_INTERVAL: Final[float] = float(
 SCORCH_HOST_VALIDATORS: Final[bool] = (
     os.getenv("PHENIX_SCORCH_HOST_VALIDATORS", "1") != "0"
 )
+
+# Suffixes Docker Compose deployments add to the phenix and minimega container
+# hostnames: the default of phenix core's --hostname-suffixes.
+DEFAULT_HOSTNAME_SUFFIXES: Final[tuple[str, ...]] = ("-minimega", "-phenix")
+
+
+def hostname_suffixes() -> tuple[str, ...]:
+    """The suffixes phenix core trims from host names to tell the headnode.
+
+    Read from ``PHENIX_HOSTNAME_SUFFIXES`` at each call, as phenix passes its
+    --hostname-suffixes to apps and SCORCH components: comma-separated, split
+    as core splits it. Unset means core's defaults; set but empty means none.
+    """
+    value = os.environ.get("PHENIX_HOSTNAME_SUFFIXES")
+
+    if value is None:
+        return DEFAULT_HOSTNAME_SUFFIXES
+
+    return tuple(suffix for suffix in value.split(",") if suffix)
