@@ -1,10 +1,10 @@
 """BACnet/IP server settings of an OT-sim field device.
 
-A BACnet module reads them from the `bacnet` element of the device's config:
-the endpoint with its prefix (a BACnet/IP node hears broadcasts on its subnet's
-directed broadcast address, so it needs the prefix, not only the address), the
-Device object, and one object per infrastructure variable with the message-bus
-tag its present-value follows.
+OT-sim's BACnet module (`ot-sim-bacnet-module`) reads them from the `bacnet`
+element of the device's config: the endpoint with its prefix (a BACnet/IP node
+hears broadcasts on its subnet's directed broadcast address, so it needs the
+prefix, not only the address), the Device object, and one object per
+infrastructure variable with the message-bus tag its present-value follows.
 """
 
 from typing import Any, Final
@@ -40,6 +40,7 @@ OBJECT_KEYS: Final = (
     "name",
     "description",
     "units",
+    "cov-increment",
     "commandable",
     "min",
     "max",
@@ -196,6 +197,15 @@ def object_settings(hostname: str, reg: Any) -> dict[str, Any]:
     if "min" in obj and "max" in obj and obj["min"] > obj["max"]:
         raise AppError(f"ot-sim: {where} min is greater than max")
 
+    if "cov-increment" in md:
+        if kind not in ANALOG_OBJECTS:
+            raise AppError(
+                f"ot-sim: {where} sets cov-increment, which only analog objects have"
+            )
+        if not _is_number(md["cov-increment"]) or md["cov-increment"] < 0:
+            raise AppError(f"ot-sim: {where} cov-increment must be a number, 0 or more")
+        obj["cov-increment"] = md["cov-increment"]
+
     states = md.get("states")
     if kind == MULTI_STATE:
         if (
@@ -289,14 +299,9 @@ class BACnet(Protocol):
         prefix = interface_prefix(node, ip)
         ET.SubElement(self.root, "endpoint").text = f"{ip}/{prefix}:{port}"
 
-        ET.SubElement(
-            self.root,
-            "device",
-            {
-                "instance": str(self.settings["instance"]),
-                "name": self.settings["name"],
-            },
-        )
+        device = ET.SubElement(self.root, "device")
+        ET.SubElement(device, "instance").text = str(self.settings["instance"])
+        ET.SubElement(device, "name").text = self.settings["name"]
 
         if "stale-after" in self.settings:
             stale = ET.SubElement(self.root, "stale-after")
@@ -307,22 +312,24 @@ class BACnet(Protocol):
         assign_instances(self.hostname, objects)
 
         for obj in objects:
-            attrs = {
-                "type": obj["type"],
-                "instance": str(obj["instance"]),
-                "name": obj["name"],
-                "tag": obj["tag"],
-            }
-            if "description" in obj:
-                attrs["description"] = obj["description"]
-            if "units" in obj:
-                attrs["units"] = obj["units"]
-            if obj["commandable"]:
-                attrs["commandable"] = "true"
+            element = ET.SubElement(self.root, "object", {"type": obj["type"]})
+            ET.SubElement(element, "instance").text = str(obj["instance"])
+            ET.SubElement(element, "tag").text = obj["tag"]
+            ET.SubElement(element, "name").text = obj["name"]
+
+            for key in ("description", "units"):
+                if key in obj:
+                    ET.SubElement(element, key).text = obj[key]
+            if "cov-increment" in obj:
+                ET.SubElement(
+                    element, "cov-increment"
+                ).text = f"{obj['cov-increment']:g}"
+            # The module gives every output a priority array and no input one, so
+            # only a value object has to say.
+            if obj["commandable"] and obj["type"] not in OUTPUT_OBJECTS:
+                ET.SubElement(element, "commandable").text = "true"
             for key in ("min", "max"):
                 if key in obj:
-                    attrs[key] = f"{obj[key]:g}"
-
-            element = ET.SubElement(self.root, "object", attrs)
+                    ET.SubElement(element, key).text = f"{obj[key]:g}"
             for state in obj.get("states", []):
                 ET.SubElement(element, "state").text = state

@@ -69,9 +69,22 @@ def app_md(**variables):
     return md
 
 
+def device(root):
+    """The Device object's instance and name."""
+    return (
+        root.findtext("bacnet/device/instance"),
+        root.findtext("bacnet/device/name"),
+    )
+
+
 def objects(root):
     return [
-        (obj.get("type"), int(obj.get("instance")), obj.get("name"), obj.get("tag"))
+        (
+            obj.get("type"),
+            int(obj.findtext("instance")),
+            obj.findtext("name"),
+            obj.findtext("tag"),
+        )
         for obj in root.findall("bacnet/object")
     ]
 
@@ -84,7 +97,7 @@ def test_bacnet_server_is_rendered_with_its_objects(run_otsim):
     assert bacnet.attrib == {"name": "bacnet-server", "mode": "server"}
     # the node's own address with its prefix, and the BACnet/IP port
     assert bacnet.findtext("endpoint") == "10.30.10.22/24:47808"
-    assert bacnet.find("device").attrib == {"instance": "3003", "name": "bas-vent"}
+    assert device(root) == ("3003", "bas-vent")
     assert bacnet.find("stale-after") is None
 
     # one object per variable, numbered from 1 within its object type
@@ -101,21 +114,22 @@ def test_bacnet_server_is_rendered_with_its_objects(run_otsim):
 
 def test_object_attributes_follow_the_variable(run_otsim):
     root = config_xml(run_otsim(NODES, [bas()], APP_MD), "bas-vent")
-    by_tag = {o.get("tag"): o for o in root.findall("bacnet/object")}
+    by_tag = {o.findtext("tag"): o for o in root.findall("bacnet/object")}
 
     co2 = by_tag["bas-vent.co2_ppm"]
-    assert co2.get("units") == "partsPerMillion"
-    assert co2.get("description") == "Cellar CO2"
-    assert co2.get("commandable") is None
+    assert co2.findtext("units") == "partsPerMillion"
+    assert co2.findtext("description") == "Cellar CO2"
+    assert co2.find("commandable") is None
 
     exhaust = by_tag["bas-vent.exhaust_pct"]
-    assert (exhaust.get("min"), exhaust.get("max")) == ("0", "100")
-    assert exhaust.get("commandable") == "true"
+    assert (exhaust.findtext("min"), exhaust.findtext("max")) == ("0", "100")
 
-    # an output is commandable, and so is a value object of a writable variable
-    assert by_tag["bas-vent.fan"].get("commandable") == "true"
-    assert by_tag["bas-vent.setpoint_ppm"].get("commandable") == "true"
-    assert by_tag["bas-vent.tier"].get("commandable") is None
+    # The module makes every output commandable, so only a value object of a
+    # writable variable says so.
+    assert exhaust.find("commandable") is None
+    assert by_tag["bas-vent.fan"].find("commandable") is None
+    assert by_tag["bas-vent.setpoint_ppm"].findtext("commandable") == "true"
+    assert by_tag["bas-vent.tier"].find("commandable") is None
 
     mode = by_tag["bas-vent.mode"]
     assert [s.text for s in mode.findall("state")] == [
@@ -123,6 +137,15 @@ def test_object_attributes_follow_the_variable(run_otsim):
         "unoccupied",
         "standby",
     ]
+
+
+def test_cov_increment_is_rendered(run_otsim):
+    variables = {"co2_ppm": {"type": "analog-read", "bacnet": {"cov-increment": 25}}}
+    root = config_xml(run_otsim(NODES, [bas()], app_md(**variables)), "bas-vent")
+    by_tag = {o.findtext("tag"): o for o in root.findall("bacnet/object")}
+
+    assert by_tag["bas-vent.co2_ppm"].findtext("cov-increment") == "25"
+    assert by_tag["bas-vent.exhaust_pct"].find("cov-increment") is None
 
 
 def test_bacnet_only_host_gets_its_io_module_and_helics_annotation(run_otsim):
@@ -168,7 +191,7 @@ def test_host_settings(run_otsim):
 
     bacnet = root.find("bacnet")
     assert bacnet.findtext("endpoint") == "10.30.10.22/24:47809"
-    assert bacnet.find("device").attrib == {"instance": "3003", "name": "BAS-VENT-1"}
+    assert device(root) == ("3003", "BAS-VENT-1")
     assert bacnet.findtext("stale-after") == "45"
     modules = {m.get("name"): m.text for m in root.findall("cpu/module")}
     assert modules["bacnet"] == (
@@ -197,19 +220,19 @@ def test_per_device_objects_override_the_variable_settings(run_otsim):
         }
     )
     root = config_xml(run_otsim(NODES, [host], APP_MD), "bas-vent")
-    by_tag = {o.get("tag"): o for o in root.findall("bacnet/object")}
+    by_tag = {o.findtext("tag"): o for o in root.findall("bacnet/object")}
 
     co2 = by_tag["bas-vent.co2_ppm"]
-    assert co2.get("name") == "FAC.VENT.AT01.PV"
-    assert co2.get("description") == "Cellar CO2 sensor 1"
-    assert co2.get("instance") == "7"
-    assert co2.get("units") == "partsPerMillion"  # kept from the variable
-    assert by_tag["bas-vent.exhaust_pct"].get("max") == "80"
-    assert by_tag["bas-vent.exhaust_pct"].get("min") == "0"
+    assert co2.findtext("name") == "FAC.VENT.AT01.PV"
+    assert co2.findtext("description") == "Cellar CO2 sensor 1"
+    assert co2.findtext("instance") == "7"
+    assert co2.findtext("units") == "partsPerMillion"  # kept from the variable
+    assert by_tag["bas-vent.exhaust_pct"].findtext("max") == "80"
+    assert by_tag["bas-vent.exhaust_pct"].findtext("min") == "0"
 
     # the second device's objects take the free instances: 7 is taken, 1 is not
-    assert by_tag["bas-vent-2.co2_ppm"].get("instance") == "1"
-    assert by_tag["bas-vent-2.exhaust_pct"].get("instance") == "2"
+    assert by_tag["bas-vent-2.co2_ppm"].findtext("instance") == "1"
+    assert by_tag["bas-vent-2.exhaust_pct"].findtext("instance") == "2"
 
     # the I/O module is rendered as if `objects` were not there
     keys = {s.findtext("key") for s in root.findall("io/subscription")}
@@ -395,6 +418,14 @@ BAD_VARIABLES = [
         f"{OBJ}exhaust_pct' min is greater than max",
     ),
     (
+        {"fan": {"type": "binary-read-write", "bacnet": {"cov-increment": 1}}},
+        f"{OBJ}fan' sets cov-increment, which only analog objects have",
+    ),
+    (
+        {"co2_ppm": {"type": "analog-read", "bacnet": {"cov-increment": -1}}},
+        f"{OBJ}co2_ppm' cov-increment must be a number, 0 or more",
+    ),
+    (
         {"exhaust_pct": {"type": "analog-read-write", "bacnet": {"max": "100"}}},
         f"{OBJ}exhaust_pct' max must be a number",
     ),
@@ -477,10 +508,12 @@ def test_an_unknown_key_warns_and_is_not_rendered(run_otsim, mocker):
         "unknown bacnet key 'unit'"
     ) in messages
     (co2,) = [
-        o for o in root.findall("bacnet/object") if o.get("tag").endswith("co2_ppm")
+        o
+        for o in root.findall("bacnet/object")
+        if o.findtext("tag").endswith("co2_ppm")
     ]
-    assert co2.get("unit") is None
-    assert co2.get("units") is None
+    assert co2.find("unit") is None
+    assert co2.find("units") is None
 
 
 def test_the_readme_example_renders(run_otsim):
@@ -496,10 +529,7 @@ def test_the_readme_example_renders(run_otsim):
     )
 
     assert root.findtext("bacnet/endpoint") == "10.30.10.22/24:47808"
-    assert root.find("bacnet/device").attrib == {
-        "instance": "3003",
-        "name": "BAS-VENT-1",
-    }
+    assert device(root) == ("3003", "BAS-VENT-1")
     assert objects(root) == [
         ("analog-input", 1, "FAC.VENT.AT01.PV", "bas-vent.co2_ppm"),
         ("binary-input", 1, "bas-vent.fan_status", "bas-vent.fan_status"),

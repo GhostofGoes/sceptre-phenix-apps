@@ -329,7 +329,7 @@ Host `bacnet` settings (a map; there is no list form):
 | `devices[].objects` | none | Per-variable settings for this device only (a point's own name, description, limits, instance); they override the variable's `bacnet` settings |
 | `interface` | first topology interface, port 47808 | `interface[:port]` or `ip[:port]`. The address must be one of the node's own: the endpoint is rendered as `ip/prefix:port`, because a BACnet/IP node hears broadcasts on its subnet's broadcast address |
 | `name` | the hostname | Name of the Device object |
-| `stale-after` | the module's default | Seconds without a value before an object reports a fault; 0 turns it off |
+| `stale-after` | off | Seconds without a value before an object reports a fault |
 | `module` | `ot-sim-bacnet-module {{config_file}}` | Command the CPU module starts |
 
 Variable `bacnet` settings (all optional):
@@ -341,6 +341,7 @@ Variable `bacnet` settings (all optional):
 | `name` | the tag, `<device>.<variable>` | Object name, unique within the host |
 | `description` | none | Object description |
 | `units` | none | BACnet engineering-units name (analog objects) |
+| `cov-increment` | the module's default (0.1) | How far present-value moves before COV subscribers are notified (analog objects) |
 | `min`, `max` | none | Limits of a written value (analog objects) |
 | `states` | required for `multi-state-value` | State texts, state 1 first |
 | `commandable` | true for a read-write variable | Gives the object a priority array and lets present-value be written. An output is always commandable; a read-only variable never is |
@@ -358,13 +359,14 @@ Troubleshooting:
 
 Limitations:
 
-- OT-sim does not ship a BACnet module. The device image must provide one that
-  reads the `bacnet` element above (`endpoint`, `device`, optional `stale-after`,
-  and `object` elements with `type`, `instance`, `name`, `tag`, and the optional
-  attributes), named by `module`.
+- The config is rendered for OT-sim's BACnet module (`ot-sim-bacnet-module`),
+  which is proposed upstream and not in OT-sim's `main` branch yet. Until it is,
+  the device image must have an OT-sim build that includes it.
 - Server only. OT-sim has no BACnet client, so a `fep` or `fd-client` cannot
   poll a device over BACnet, and a `fep` cannot serve BACnet downstream.
 - `units` is not checked here; the module rejects a name it does not know.
+- The module's `override-tag` (a second tag that says whether a BACnet command
+  is in force) is not rendered.
 
 # Outstation point map
 
