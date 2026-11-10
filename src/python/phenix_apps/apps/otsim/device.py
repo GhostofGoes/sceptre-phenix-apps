@@ -1,6 +1,7 @@
 import lxml.etree as ET
 
 from phenix_apps.apps.otsim.infrastructure import merge_infrastructure_with_default
+from phenix_apps.apps.otsim.protocols.bacnet import BACnet, host_settings
 from phenix_apps.apps.otsim.protocols.dnp3 import DNP3
 from phenix_apps.apps.otsim.protocols.modbus import Modbus
 from phenix_apps.common.error import AppError
@@ -10,6 +11,30 @@ DEFAULT_ANALOG_DATA_TYPE = "int32"
 
 # The protocols a FEP can serve its polled points over.
 DOWNSTREAM_PROTOCOLS = ("dnp3", "modbus")
+
+# The protocols OT-sim has a client for. BACnet is served only.
+POLLED_PROTOCOLS = ("dnp3", "modbus")
+
+
+def polled_registers(kind, node, upstream, device):
+    """The registers of `device` that `node` (a `kind`: fep or fd-client) can
+    poll, by protocol. A device that serves only BACnet cannot be polled."""
+    polled = {
+        proto: regs
+        for proto, regs in device.registers.items()
+        if proto in POLLED_PROTOCOLS
+    }
+
+    if device.registers and not polled:
+        hostname = node.get("hostname")
+        raise AppError(
+            f"ot-sim: {kind} '{hostname}' polls '{upstream}', which serves only "
+            f"{' and '.join(device.registers)}; OT-sim has no client for it, so "
+            f"give '{upstream}' a modbus or dnp3 section too or remove it from "
+            f"'{hostname}'"
+        )
+
+    return polled
 
 
 def protocol_md(variable, proto):
@@ -127,7 +152,7 @@ class FEP(Device):
 
             device.process(devices)
 
-            for proto, regs in device.registers.items():
+            for proto, regs in polled_registers("fep", self.node, name, device).items():
                 polled.setdefault(proto, []).extend(regs)
 
         # Serve each tag once: an upstream fep serves every point over each of
@@ -304,6 +329,83 @@ class FieldDeviceServer(Device):
                     )
                     self.registers["modbus"].append(reg)
 
+        if "bacnet" in self.md:
+            self.registers["bacnet"] = []
+            hostname = self.node["hostname"]
+
+            # md['bacnet'] is always a map: next to `devices` it carries the
+            # `instance` of the BACnet Device object. Each device entry may give
+            # per-variable `objects` settings (an object name, a description,
+            # limits) that override the infrastructure variable's `bacnet` ones.
+            for fd in host_settings(hostname, self.md["bacnet"])["devices"]:
+                if (
+                    not isinstance(fd, dict)
+                    or not isinstance(fd.get("name"), str)
+                    or "type" not in fd
+                ):
+                    raise AppError(
+                        f"ot-sim: fd-server '{hostname}' bacnet.devices entries "
+                        "need a `name` and a `type`"
+                    )
+                if fd["type"] not in mapping:
+                    raise AppError(
+                        f"ot-sim: fd-server '{hostname}' bacnet device "
+                        f"'{fd['name']}' has type '{fd['type']}', which "
+                        f"infrastructure '{self.infra}' does not define"
+                    )
+                device = mapping[fd["type"]]
+
+                # device name might be prefixed with HELICS federate name
+                parts = fd["name"].split("/")
+                name = parts[1] if len(parts) > 1 else parts[0]
+
+                where = f"ot-sim: fd-server '{hostname}' bacnet device '{fd['name']}'"
+                overrides = fd.get("objects") or {}
+                if not isinstance(overrides, dict):
+                    raise AppError(
+                        f"{where} objects must be a map of variable to settings"
+                    )
+                unknown = [var for var in overrides if var not in device]
+                if unknown:
+                    raise AppError(
+                        f"{where} sets objects for "
+                        f"{', '.join(repr(var) for var in unknown)}; type "
+                        f"'{fd['type']}' has {', '.join(device)}"
+                    )
+
+                for var, var_type in device.items():
+                    if isinstance(var_type, str):
+                        var_type = {"type": var_type}
+
+                    settings = {}
+                    for source, given in (
+                        (
+                            f"infrastructure variable '{fd['type']}.{var}' bacnet",
+                            protocol_md(var_type, "bacnet"),
+                        ),
+                        (f"{where} objects.{var}", overrides.get(var) or {}),
+                    ):
+                        if not isinstance(given, dict):
+                            raise AppError(
+                                f"ot-sim: fd-server '{hostname}': {source} must be "
+                                "a map of settings"
+                                if source.startswith("infrastructure")
+                                else f"{source} must be a map of settings"
+                            )
+                        settings.update(given)
+
+                    reg = Register(
+                        var_type["type"],
+                        f"{name}.{var}",
+                        settings,
+                        device=name,
+                        device_type=fd["type"],
+                        variable=var,
+                        protocol="bacnet",
+                        var_type=var_type,
+                    )
+                    self.registers["bacnet"].append(reg)
+
         self.processed = True
 
     def configure(self, config):
@@ -330,6 +432,17 @@ class FieldDeviceServer(Device):
             config.append_to_root(server.root)
             config.append_to_cpu(module)
 
+        if "bacnet" in self.registers:
+            server = BACnet()
+            server.init_xml_root("server", self.node)
+            server.registers_to_xml(self.registers["bacnet"])
+
+            module = ET.Element("module", {"name": "bacnet"})
+            module.text = server.settings["module"]
+
+            config.append_to_root(server.root)
+            config.append_to_cpu(module)
+
 
 class FieldDeviceClient(Device):
     def __init__(self, node, configs=None):
@@ -346,6 +459,7 @@ class FieldDeviceClient(Device):
             assert device
 
             device.process(devices)
+            polled_registers("fd-client", self.node, name, device)
 
         self.processed = True
 

@@ -157,9 +157,9 @@ spec:
 
           helics:
             # Defaults to helics.broker in app metadata if not provided.
-            # An fd-server with modbus or dnp3 devices needs a `hostname`
-            # or `address` from one of the two; pre-start fails naming the
-            # host otherwise.
+            # An fd-server with modbus, dnp3, or bacnet devices needs a
+            # `hostname` or `address` from one of the two; pre-start fails
+            # naming the host otherwise.
             # If provided for a host, and both `hostname` and
             # `base-fed-count` are provided, a separate inject is tracked
             # and generated for the given host in the topology file. Similar
@@ -183,7 +183,8 @@ spec:
           # to listen on or it can be an interface name:port to listen on,
           # in which case the IP is pulled from the topology file. For
           # either, if no port is specified, the default port for the
-          # protocol will be used.
+          # protocol will be used. The `bacnet` section has only the map
+          # form; see BACnet below.
 
           modbus:
           # Will default to listening on port 502 of the IP configured for
@@ -261,6 +262,109 @@ can be added to front end processor (fep), field client devices
                 user: foo
                 pass: bar
 ```
+
+# BACnet
+
+An `fd-server` with a `bacnet` section is a BACnet/IP server: the app renders a
+`bacnet` element with a Device object and one object per infrastructure variable,
+and adds the `bacnet` module to the CPU module. The host is a HELICS federate like
+any other `fd-server`, so it gets the I/O module and the `helics/federate`
+annotation too. A host can list the same device under `bacnet` and under `modbus`
+or `dnp3`.
+
+```yaml
+metadata:
+  infrastructure: building
+  helics:
+    broker:
+      address: 10.20.0.5
+    federate: building
+  infrastructures:
+    building:
+      vent:
+        co2_ppm:
+          type: analog-read            # served as analog-input 1
+          bacnet:
+            units: partsPerMillion
+        fan_status: binary-read        # binary-input 1
+        exhaust_pct:
+          type: analog-read-write      # analog-output 1, commandable
+          bacnet:
+            units: percent
+            min: 0
+            max: 100
+        setpoint_ppm:
+          type: analog-read-write
+          bacnet:
+            object-type: analog-value  # a setpoint: a value object, commandable
+            units: partsPerMillion
+        mode:
+          type: analog-read-write
+          bacnet:
+            object-type: multi-state-value
+            states: [occupied, unoccupied, standby]
+hosts:
+- hostname: bas-vent
+  metadata:
+    type: fd-server
+    bacnet:
+      interface: IF0:47808
+      instance: 3003
+      name: BAS-VENT-1
+      devices:
+      - name: building/bas-vent
+        type: vent
+        objects:
+          co2_ppm:
+            name: FAC.VENT.AT01.PV
+            description: Cellar CO2 sensor 1
+```
+
+Host `bacnet` settings (a map; there is no list form):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `instance` | required | Instance of the Device object, 0 to 4194302, unique on the BACnet network |
+| `devices` | required | Devices to serve, as in `modbus` and `dnp3`: `name`, `type`, optional `endpoint` |
+| `devices[].objects` | none | Per-variable settings for this device only (a point's own name, description, limits, instance); they override the variable's `bacnet` settings |
+| `interface` | first topology interface, port 47808 | `interface[:port]` or `ip[:port]`. The address must be one of the node's own: the endpoint is rendered as `ip/prefix:port`, because a BACnet/IP node hears broadcasts on its subnet's broadcast address |
+| `name` | the hostname | Name of the Device object |
+| `stale-after` | the module's default | Seconds without a value before an object reports a fault; 0 turns it off |
+| `module` | `ot-sim-bacnet-module {{config_file}}` | Command the CPU module starts |
+
+Variable `bacnet` settings (all optional):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `object-type` | by variable type: `analog-input`, `analog-output`, `binary-input`, `binary-output` | Also `analog-value`, `binary-value`, and, for an analog variable, `multi-state-value`. An output needs a read-write variable and an input a read-only one |
+| `instance` | lowest free one of the object type, from 1, in device and variable order | Object instance |
+| `name` | the tag, `<device>.<variable>` | Object name, unique within the host |
+| `description` | none | Object description |
+| `units` | none | BACnet engineering-units name (analog objects) |
+| `min`, `max` | none | Limits of a written value (analog objects) |
+| `states` | required for `multi-state-value` | State texts, state 1 first |
+| `commandable` | true for a read-write variable | Gives the object a priority array and lets present-value be written. An output is always commandable; a read-only variable never is |
+
+Troubleshooting:
+
+| Error | Fix |
+|---|---|
+| `fd-server '<host>' sets bacnet without `instance`, the instance of its BACnet Device object` | Add `instance` |
+| `fd-server '<host>' bacnet must be a map with `instance` and `devices`; it has no list form` | Move the device list under `devices` |
+| `fd-server '<host>' has no topology interface with address <ip>; ...` | Set `interface` to an interface name or one of the node's addresses |
+| `fd-server '<host>' BACnet object for '<tag>' is an output object, but the variable is '<type>': ...` | Make the variable read-write, or use an input or value object |
+| `fd-server '<host>' has two <type> objects with instance <n> (second: '<tag>')` | Give one of them another `instance`, or leave it out |
+| `<fep or fd-client> '<host>' polls '<device>', which serves only bacnet; OT-sim has no client for it, ...` | Give the device a `modbus` or `dnp3` section too, or stop polling it |
+
+Limitations:
+
+- OT-sim does not ship a BACnet module. The device image must provide one that
+  reads the `bacnet` element above (`endpoint`, `device`, optional `stale-after`,
+  and `object` elements with `type`, `instance`, `name`, `tag`, and the optional
+  attributes), named by `module`.
+- Server only. OT-sim has no BACnet client, so a `fep` or `fd-client` cannot
+  poll a device over BACnet, and a `fep` cannot serve BACnet downstream.
+- `units` is not checked here; the module rejects a name it does not know.
 
 # Outstation point map
 

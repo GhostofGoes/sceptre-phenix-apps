@@ -10,7 +10,7 @@ NODES = [topo_node("power", "10.20.0.5"), topo_node("rtu-1", "10.20.0.11")]
 DEVICES = {"type": "fd-server", "modbus": [{"name": "bus-01", "type": "bus"}]}
 
 APP_LEVEL = (
-    r"ot-sim: fd-server 'rtu-1' has modbus or dnp3 devices, so its I/O module "
+    r"ot-sim: fd-server 'rtu-1' has modbus, dnp3, or bacnet devices, so its I/O module "
     r"needs a HELICS broker, but neither its metadata nor the app metadata sets "
     r"helics\.broker\.hostname or helics\.broker\.address"
 )

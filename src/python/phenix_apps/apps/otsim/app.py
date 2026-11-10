@@ -107,8 +107,8 @@ class OTSim(AppBase):
 
         if not addr:
             raise AppError(
-                f"ot-sim: fd-server '{hostname}' has modbus or dnp3 devices, so its "
-                f"I/O module needs a HELICS broker, but {missing}"
+                f"ot-sim: fd-server '{hostname}' has modbus, dnp3, or bacnet devices, "
+                f"so its I/O module needs a HELICS broker, but {missing}"
             )
 
         return addr
@@ -200,6 +200,14 @@ class OTSim(AppBase):
                     proto_devs += md["modbus"].get("devices", [])
                 else:
                     proto_devs += md["modbus"]
+
+            if "bacnet" in md:
+                # `objects` shapes only the BACnet objects, so a device that is
+                # also listed under another protocol still compares equal.
+                proto_devs += [
+                    {key: value for key, value in device.items() if key != "objects"}
+                    for device in md["bacnet"]["devices"]
+                ]
 
             for device in proto_devs:
                 assert "name" in device
