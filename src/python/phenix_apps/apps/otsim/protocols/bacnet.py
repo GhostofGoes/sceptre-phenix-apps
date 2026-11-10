@@ -15,26 +15,41 @@ from phenix_apps.apps.otsim.protocols.protocol import Protocol, resolve_endpoint
 from phenix_apps.common.error import AppError
 from phenix_apps.common.logger import logger
 
-DEFAULT_PORT: Final = 47808
+DEFAULT_PORT: Final[int] = 47808
 # Object and device instances are 22 bits; 4194303 is the wildcard.
-MAX_INSTANCE: Final = 4194302
-DEFAULT_MODULE: Final = "ot-sim-bacnet-module {{config_file}}"
+MAX_INSTANCE: Final[int] = 4194302
+DEFAULT_MODULE: Final[str] = "ot-sim-bacnet-module {{config_file}}"
 
 # The object a variable is served as unless its `bacnet.object-type` says otherwise.
-DEFAULT_OBJECT_TYPE: Final = {
+DEFAULT_OBJECT_TYPE: Final[dict[str, str]] = {
     "analog-read": "analog-input",
     "analog-read-write": "analog-output",
     "binary-read": "binary-input",
     "binary-read-write": "binary-output",
 }
-ANALOG_OBJECTS: Final = ("analog-input", "analog-output", "analog-value")
-BINARY_OBJECTS: Final = ("binary-input", "binary-output", "binary-value")
-MULTI_STATE: Final = "multi-state-value"
-INPUT_OBJECTS: Final = ("analog-input", "binary-input")
-OUTPUT_OBJECTS: Final = ("analog-output", "binary-output")
+ANALOG_OBJECTS: Final[tuple[str, ...]] = (
+    "analog-input",
+    "analog-output",
+    "analog-value",
+)
+BINARY_OBJECTS: Final[tuple[str, ...]] = (
+    "binary-input",
+    "binary-output",
+    "binary-value",
+)
+MULTI_STATE: Final[str] = "multi-state-value"
+INPUT_OBJECTS: Final[tuple[str, ...]] = ("analog-input", "binary-input")
+OUTPUT_OBJECTS: Final[tuple[str, ...]] = ("analog-output", "binary-output")
 
-HOST_KEYS: Final = ("interface", "instance", "name", "stale-after", "module", "devices")
-OBJECT_KEYS: Final = (
+HOST_KEYS: Final[tuple[str, ...]] = (
+    "interface",
+    "instance",
+    "name",
+    "stale-after",
+    "module",
+    "devices",
+)
+OBJECT_KEYS: Final[tuple[str, ...]] = (
     "object-type",
     "instance",
     "name",
