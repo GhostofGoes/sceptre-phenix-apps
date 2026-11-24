@@ -3,7 +3,8 @@
 The app reads a checkout of the CherryMountain Brewery topology, which
 ``topology.py`` finds. Without one, the test modules here are not collected
 (some read the checkout when they are imported) and test_topology_checkout.py
-reports the skip.
+reports the skip. The modules in ``NO_CHECKOUT`` read no checkout and always
+run.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import io
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -26,11 +27,13 @@ _FOUND: Path | None = topology.find()
 #: plantgen output, and phenix-injects/ from it, as sourceDir in a range.
 #: Without a checkout it is a path that does not exist, and no test runs.
 ROOT: Path = _FOUND or HERE / "no-topology-checkout"
+#: The test modules that read no checkout: they run without one.
+NO_CHECKOUT: Final[frozenset[str]] = frozenset({"test_template_lint.py"})
 if _FOUND is None:
     collect_ignore: list[str] = sorted(
         path.name
         for path in HERE.glob("test_*.py")
-        if path.name != "test_topology_checkout.py"
+        if path.name not in {"test_topology_checkout.py", *NO_CHECKOUT}
     )
 EXPERIMENT: dict[str, Any] = json.loads(
     (HERE / "fixtures" / "experiment-ci.json").read_text()
@@ -58,8 +61,8 @@ def node(exp: dict[str, Any], hostname: str) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _topology_checkout() -> None:
-    if _FOUND is None:
+def _topology_checkout(request: pytest.FixtureRequest) -> None:
+    if _FOUND is None and request.path.name not in NO_CHECKOUT:
         pytest.skip(topology.MISSING)
 
 

@@ -165,6 +165,9 @@ input file.
   They find it in `CHERRYMOUNTAIN_TOPOLOGY_DIR` or next to this repository.
   Without a checkout, they are skipped. CI checks the topology out at a pinned
   commit. See the Tests section of the app's `README.md`.
+- `test_template_lint.py` of that app needs no checkout. It runs `shellcheck`,
+  `systemd-analyze`, and `desktop-file-validate` on the app's `templates/`.
+  Without a tool, its tests are skipped; with `CI` set, they fail.
 - Golden files under the SCEPTRE app are intentional compatibility fixtures.
   Regenerate with `PHENIX_UPDATE_GOLDEN=1` only when the expected behavior
   changed, then review the full diff.

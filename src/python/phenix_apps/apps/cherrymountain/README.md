@@ -624,6 +624,11 @@ If node is installed, node runs the JavaScript of the snippet. The run by hand
 in [HMI kiosk](#hmi-kiosk) shows that the real Chromium takes what the script
 gives it.
 
+`test_template_lint.py` runs `shellcheck`, `systemd-analyze`, and
+`desktop-file-validate` on the scripts, units, and desktop entry in
+`templates/`. These tests need no topology checkout. If a tool is missing,
+pytest skips its tests, or fails them when `CI` is set.
+
 ## Limitations
 
 - The app did not run on a VM. Every image for which the app renders files
