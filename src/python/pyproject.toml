@@ -122,6 +122,11 @@ phenix_apps = [
     "apps/ignition/templates/**/*",
     # scripts, units, and a .desktop file that cherrymountain injects as they are
     "apps/cherrymountain/templates/**/*",
+    # The topology's own checks run the cherrymountain and plantevent tests from
+    # an installed package (pytest --pyargs), so the files they read ship too.
+    "apps/cherrymountain/README.md",
+    "apps/cherrymountain/tests/fixtures/*",
+    "apps/scorch/plantevent/README.md",
 ]
 
 # dynamically read version from phenix_apps.__version__

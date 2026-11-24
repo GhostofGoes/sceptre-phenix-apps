@@ -502,7 +502,8 @@ The tests run the app on a checkout of the topology directory, with its Git LFS
 files (`git lfs pull`). They find it in `CHERRYMOUNTAIN_TOPOLOGY_DIR`, or in a
 `sceptre-phenix-topologies` checkout next to this repository
 (`tests/topology.py`). Without one, they are skipped, and one skipped test says
-why. From `src/python`:
+why. The topology's own checks run them the same way from an installed
+package (`pytest --pyargs phenix_apps.apps.cherrymountain`). From `src/python`:
 
 ```shell
 export CHERRYMOUNTAIN_TOPOLOGY_DIR=/phenix/topologies/cherrymountain-brewery

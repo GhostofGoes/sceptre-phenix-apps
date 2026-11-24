@@ -24,8 +24,9 @@ MISSING: Final[str] = (
     "cherrymountain-brewery directory of a sceptre-phenix-topologies checkout "
     "(with its Git LFS files), or put that checkout next to this repository"
 )
-#: The directory that holds this repository's checkout.
-_NEXT_TO_REPOSITORY: Final[Path] = Path(__file__).resolve().parents[7]
+#: How far above this file the directory that holds this repository's checkout
+#: is: tests, cherrymountain, apps, phenix_apps, python, src, the repository.
+_LEVELS_TO_REPOSITORY_PARENT: Final[int] = 7
 
 
 def _is_topology(path: Path) -> bool:
@@ -46,7 +47,13 @@ def find() -> Path | None:
                 "it has no plant/plant.yaml"
             )
         return path
+    # An installed copy of the package can sit less deep than a checkout.
+    parents = Path(__file__).resolve().parents
+    if len(parents) <= _LEVELS_TO_REPOSITORY_PARENT:
+        return None
     sibling: Path = (
-        _NEXT_TO_REPOSITORY / "sceptre-phenix-topologies" / "cherrymountain-brewery"
+        parents[_LEVELS_TO_REPOSITORY_PARENT]
+        / "sceptre-phenix-topologies"
+        / "cherrymountain-brewery"
     )
     return sibling if _is_topology(sibling) else None
