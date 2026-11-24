@@ -59,6 +59,7 @@
 
 # Apps
 /src/python/phenix_apps/apps/caldera/       @activeshadow
+/src/python/phenix_apps/apps/cherrymountain/ @GhostofGoes
 /src/python/phenix_apps/apps/helics/        @activeshadow @glattercj @Astarry
 /src/python/phenix_apps/apps/ignition/      @nblair2
 /src/python/phenix_apps/apps/mgmt_tap/      @mgaliar @GhostofGoes @cmulk

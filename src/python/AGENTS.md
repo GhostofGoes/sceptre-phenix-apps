@@ -113,7 +113,8 @@ scheduling fields, and write only the resulting JSON to stdout. Extend
 
 The SCEPTRE app ships configuration tables and the MyDesigner template tree;
 Ignition ships a Jython 2.7 template tree; SCORCH ships scripts and binary
-payloads. Treat all of it as runtime package data.
+payloads; cherrymountain ships scripts, systemd units, and a `.desktop` file
+that it injects unchanged. Treat all of it as runtime package data.
 
 - `phenix_apps/apps/ignition/templates/` is Jython 2.7 and is excluded from
   Ruff and vulture. Do not modernize it to Python 3 syntax.
@@ -159,6 +160,11 @@ input file.
   app-specific attributes in the test yourself.
 - Use `real_methods=[...]` only for base methods whose real behavior is under
   test. Use `build_mock_app()` directly for non-marker flows.
+- The `cherrymountain` app's tests run on a checkout of the CherryMountain
+  Brewery topology (with its Git LFS files), which is not in this repository.
+  They find it in `CHERRYMOUNTAIN_TOPOLOGY_DIR` or next to this repository, and
+  are skipped without one; CI checks it out at a pinned commit. See the app's
+  `README.md`, Tests.
 - Golden files under the SCEPTRE app are intentional compatibility fixtures.
   Regenerate with `PHENIX_UPDATE_GOLDEN=1` only when the expected behavior
   changed, then review the full diff.

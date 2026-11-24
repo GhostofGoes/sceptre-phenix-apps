@@ -52,6 +52,7 @@ make clean       # Clean build artifacts
 | Application | Description |
 | :--- | :--- |
 | [caldera](src/python/phenix_apps/apps/caldera) | Runs operations and retrieves reports from a Caldera C2 server. |
+| [cherrymountain](src/python/phenix_apps/apps/cherrymountain) | Provisions the CherryMountain Brewery topology: checks the scenario against the plant model, renders each host's files, and reports provisioning and plant KPIs. |
 | [helics](src/python/phenix_apps/apps/helics) | Configures and manages HELICS (Hierarchical Engine for Large-scale Infrastructure Co-Simulation) federates. |
 | [ignition](src/python/phenix_apps/apps/ignition) | Configures an Ignition Gateway SCADA master from discovered DNP3 outstations or a hand-authored gateway backup. |
 | [mgmt_tap](src/python/phenix_apps/apps/mgmt_tap) | Creates a host tap on the experiment's management network to copy files to and from VMs. |
