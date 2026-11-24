@@ -160,11 +160,11 @@ input file.
   app-specific attributes in the test yourself.
 - Use `real_methods=[...]` only for base methods whose real behavior is under
   test. Use `build_mock_app()` directly for non-marker flows.
-- The `cherrymountain` app's tests run on a checkout of the CherryMountain
+- The tests of the `cherrymountain` app run on a checkout of the CherryMountain
   Brewery topology (with its Git LFS files), which is not in this repository.
-  They find it in `CHERRYMOUNTAIN_TOPOLOGY_DIR` or next to this repository, and
-  are skipped without one; CI checks it out at a pinned commit. See the app's
-  `README.md`, Tests.
+  They find it in `CHERRYMOUNTAIN_TOPOLOGY_DIR` or next to this repository.
+  Without a checkout, they are skipped. CI checks the topology out at a pinned
+  commit. See the Tests section of the app's `README.md`.
 - Golden files under the SCEPTRE app are intentional compatibility fixtures.
   Regenerate with `PHENIX_UPDATE_GOLDEN=1` only when the expected behavior
   changed, then review the full diff.
