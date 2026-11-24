@@ -113,9 +113,11 @@ def _verify(analyze: str, unit: Path) -> list[str]:
         return [f"{unit.name}: systemd-analyze verify exited {proc.returncode}"]
     # systemd-analyze also loads every unit on the machine and complains about
     # those (the runner's xfs_scrub and walinuxagent units, for example). Keep
-    # only the findings about this unit. It checks a template unit as the
-    # instance "i", and names that instance in what is not tied to a line.
-    names: tuple[str, str] = (unit.name, unit.name.replace("@.", "@i."))
+    # only the findings about this unit. It checks a template unit as an
+    # instance, and names that instance in what is not tied to a line. The
+    # instance name depends on the systemd version ("i", "test_instance"), so
+    # a template matches on its name up to the "@".
+    names: str = unit.name.split("@")[0] + "@" if "@" in unit.name else unit.name
     lines: list[str] = [
         line.replace(str(unit), unit.name)
         for line in (proc.stdout + proc.stderr).splitlines()
@@ -226,8 +228,11 @@ def test_verify_finds_the_mistakes_of_a_unit(tmp_path: Path, name: str) -> None:
     )
     findings: list[str] = _verify(_tool("systemd-analyze"), unit)
     assert len(findings) == 2, findings
-    assert f"{name}:5: Unknown key name 'NoSuchDirective'" in findings[0]
-    assert "cm-absent.service not found" in findings[1]
+    # The wording changes between systemd versions ("Unknown key name", then
+    # "Unknown key"); the unit, the line, and the directive do not.
+    assert findings[0].startswith(f"{name}:5: Unknown key"), findings
+    assert "'NoSuchDirective'" in findings[0]
+    assert "cm-absent.service not found" in findings[1], findings
 
 
 def test_exposure_finds_a_unit_without_hardening(tmp_path: Path) -> None:
