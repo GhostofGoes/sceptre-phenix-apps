@@ -83,6 +83,7 @@ make clean       # Clean build artifacts
 | [opcexport](src/python/phenix_apps/apps/scorch/opcexport) | Exports data from an OPC-UA server. |
 | [pcap](src/python/phenix_apps/apps/scorch/pcap) | Manages network packet captures (.pcap files) across the experiment. |
 | [pipe](src/python/phenix_apps/apps/scorch/pipe) | Implements minimega 'pipe' API. |
+| [plantevent](src/python/phenix_apps/apps/scorch/plantevent) | Posts operational events (outage, CO2 release, chiller fault, and others) to the CherryMountain Brewery simulation. |
 | [providerdata](src/python/phenix_apps/apps/scorch/providerdata) | Collects and verifies data from pybennu providers, such as the RTDS or OPALRT. |
 | [qos](src/python/phenix_apps/apps/scorch/qos) | Applies Quality of Service (QoS) rules (e.g., latency, packet loss) to interfaces. |
 | [rtds](src/python/phenix_apps/apps/scorch/rtds) | Interacts with RTDS (Real Time Digital Simulator) systems. |
