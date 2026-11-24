@@ -167,7 +167,7 @@ Security requirements:
 
 | Workflow | Trigger | Runs |
 |---|---|---|
-| `python.yml` | `src/python/**.py` or the workflow file | `make check`, `make test` in `src/python` |
+| `python.yml` | `src/python/**.py` or the workflow file | `make check`, `make test` in `src/python`, with the CherryMountain Brewery topology checked out for the `cherrymountain` tests |
 | `go.yml` | `src/go/**.go`, `go.mod`, `go.sum`, or the workflow file | `make check`, `make coverage` in `src/go` |
 | `codespell.yml` | Every pull request | `codespell` with `.codespellrc` |
 | `commits.yml` | Every pull request | Conventional Commit check of each commit subject |

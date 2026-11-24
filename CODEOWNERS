@@ -59,6 +59,7 @@
 
 # Apps
 /src/python/phenix_apps/apps/caldera/       @activeshadow
+/src/python/phenix_apps/apps/cherrymountain/ @GhostofGoes
 /src/python/phenix_apps/apps/helics/        @activeshadow @glattercj @Astarry
 /src/python/phenix_apps/apps/ignition/      @nblair2
 /src/python/phenix_apps/apps/mgmt_tap/      @mgaliar @GhostofGoes @cmulk
@@ -87,6 +88,7 @@
 /src/python/phenix_apps/apps/scorch/opcexport/      @GhostofGoes
 /src/python/phenix_apps/apps/scorch/pcap/           @GhostofGoes
 /src/python/phenix_apps/apps/scorch/pipe/           @glattercj
+/src/python/phenix_apps/apps/scorch/plantevent/     @GhostofGoes
 /src/python/phenix_apps/apps/scorch/providerdata/   @GhostofGoes
 /src/python/phenix_apps/apps/scorch/qos/            @GhostofGoes
 /src/python/phenix_apps/apps/scorch/rtds/           @GhostofGoes

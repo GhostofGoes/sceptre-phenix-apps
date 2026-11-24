@@ -44,8 +44,30 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
           cache-dependency-path: src/python/pyproject.toml
+      # The cherrymountain app's tests run on the topology it provisions
+      # (phenix_apps/apps/cherrymountain/tests/topology.py); without this
+      # checkout they are skipped. After a topology change, move the commit and
+      # record the test fixtures again (the app's README, Tests).
+      - name: Check out the CherryMountain Brewery topology
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: GhostofGoes/sceptre-phenix-topologies
+          ref: fb43c7f4ee7f8813aeffd600544b5ed38aa1cb08 # feat-secret-topo
+          path: topologies
+          sparse-checkout: cherrymountain-brewery
+          lfs: true
+          persist-credentials: false
+      # The cherrymountain app's test_template_lint.py runs shellcheck,
+      # systemd-analyze, and desktop-file-validate. The runner image has the
+      # first two. With CI set, the tests fail when a tool is missing.
+      - name: Install desktop-file-validate
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends desktop-file-utils
       - name: Run Tests
         working-directory: src/python
+        env:
+          CHERRYMOUNTAIN_TOPOLOGY_DIR: ${{ github.workspace }}/topologies/cherrymountain-brewery
         run: |
           make install-dev
           make test

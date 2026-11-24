@@ -537,16 +537,19 @@ class ComponentBase(ExperimentBase):
         logger.info(f"process '{process}' is not running on '{vm}'")
         return False
 
-    def configure(self) -> None:
+    # A stage may return a short result, which execute_stage writes to the
+    # stage's status file as ``return``.
+
+    def configure(self) -> str | None:
         pass
 
-    def start(self) -> None:
+    def start(self) -> str | None:
         pass
 
-    def stop(self) -> None:
+    def stop(self) -> str | None:
         pass
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> str | None:
         pass
 
 
