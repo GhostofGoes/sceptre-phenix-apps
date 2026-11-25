@@ -81,7 +81,8 @@ App block:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `variant` | name | required | The variant from plant.yaml (`ci`, `lite`, `full`) |
+| `variant` | name | required | The variant from plant.yaml (`ci`, `lite`, `full`). For a site of the fleet, it is the code of the site |
+| `site` | two letters | none | The code of one site of the fleet, from `plant/sites.yaml` ([A site of the fleet](#a-site-of-the-fleet)). Without this key, the experiment is the single site |
 | `sourceDir` | absolute path | `/phenix/topologies/cherrymountain-brewery` | The topology directory |
 | `simCtl.hostname` | hostname | `sim-ctl` | The host of the HELICS root broker and the event API |
 | `simCtl.eventPort` | port | `8080` | The port of the event API inside sim-ctl |
@@ -140,6 +141,46 @@ federate cores. It drops everything else on MGMT
 phenix does not rename the NICs of a guest. Thus the hook runs after
 `3_interfaces-start.sh`. It finds the device that holds the MGMT address and
 passes the name of the device to the ruleset (`nft -D mgmt_if=<device>`).
+
+## A site of the fleet
+
+The fleet has four breweries, and each one is a site. The generator writes
+the files of each site. The scenario of a site sets `site` in the app block.
+The key changes four things:
+
+| Part | Without `site` | With `site: fc` |
+|---|---|---|
+| Generated files | `plant/generated/<variant>/` | `plant/generated/fleet/fc/` |
+| The plant | plant.yaml, expanded for the variant | plant.yaml, expanded for the site by plantgen (`fleet.expand_site`). The hosts have the names and the addresses of the site |
+| Default host names | `sim-ctl`, `wazuh`, `scada-fuxa`, `ews` | `fc-sim-ctl`, `fc-wazuh`, `fc-scada-fuxa`, `fc-ews` |
+| HELICS broker | The phenix `helics` app starts the root broker | This app injects `cm-helics-broker.service` on the sim-ctl of the site |
+
+- A default host name gets the prefix only where the scenario gives no name. A
+  name in the scenario stays as it is.
+- A site does not need each kind of host. `fc` has one SCADA host, and it has
+  no workstation, no jump host, and no Wazuh. The app then renders nothing for
+  those kinds.
+- A site has no program ZIPs of its own. A PLC of a site runs the ZIP of the
+  `full` variant, under the name with no prefix (`fc-plc-cellar` runs
+  `plc-cellar`). The boot script replaces the plugin configuration in the ZIP
+  with that of the site.
+- `fuxa/build_project.py` builds the FUXA project of a site from the tag
+  lists of the site.
+
+The broker of a site: the fleet has one broker for each site, and the `helics`
+app has one root broker for an experiment. Thus the scenario of a site has no
+`helics` block. The app stops at configure when it finds one, because two
+brokers on one host fail without a message.
+
+- The unit runs `helics_broker --name <host> -f<count> --ipv4
+  --local_interface <MGMT address>`. The count is `federate_count` in the
+  `helics.json` of the site.
+- The broker listens on the MGMT address of its host only. A federate of a
+  different site then cannot join it by accident.
+- `55-cm-helics-broker.sh` starts the unit at boot. The federates try again
+  until the broker answers.
+- A site restarts as a whole. When the broker restarts, restart each federate
+  and each field device of the site.
 
 ## Example
 
@@ -581,6 +622,10 @@ the same way from an installed package
 export CHERRYMOUNTAIN_TOPOLOGY_DIR=/phenix/topologies/cherrymountain-brewery
 make test TEST=phenix_apps/apps/cherrymountain
 ```
+
+`tests/test_sites.py` runs the app on each of the four sites. It builds the
+experiment of a site from the generated workflow, topology file, and scenario
+of the checkout, with no recorded copy.
 
 The tests run every stage on two recorded experiments,
 `tests/fixtures/experiment-ci.json` and `experiment-full.json`.

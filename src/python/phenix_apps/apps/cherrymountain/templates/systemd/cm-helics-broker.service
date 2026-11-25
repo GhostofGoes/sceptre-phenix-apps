@@ -1,0 +1,62 @@
+[Unit]
+Description=CherryMountain HELICS broker of this site
+Documentation=file:///etc/cherrymountain/helics.json
+# One broker for each site of the fleet (docs/multisite/PLANS.md, decision D8).
+# The cherrymountain app renders this unit on a site's own sim-ctl. The single
+# site has no such unit: there the phenix helics app starts the root broker.
+# phenix startup scripts, not systemd, configure the network, so
+# network-online.target would not mean anything here.
+After=network.target
+# Never give up: the MGMT address may come up late.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# Rendered by the cherrymountain app: CM_BROKER_NAME (the host's name),
+# CM_BROKER_FEDERATES (federate_count of the site's helics.json), and
+# CM_BROKER_ADDRESS (the host's MGMT address).
+EnvironmentFile=/etc/default/cm-helics-broker
+Environment=LD_LIBRARY_PATH=/usr/local/lib
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The command line is the one the site-brokers spike ran. --local_interface
+# makes the broker listen on the site's own MGMT address only: with --ipv4
+# alone it listens on every address of the host, and a federate of another
+# site that reaches one of them joins this federation without a word.
+# helics_broker of the pip wheel is a script that runs the broker as a child.
+# systemd signals the whole control group, so a stop ends both.
+ExecStart=/usr/local/bin/helics_broker --name ${CM_BROKER_NAME} -f${CM_BROKER_FEDERATES} --ipv4 --local_interface ${CM_BROKER_ADDRESS} --loglevel summary
+# The broker ends when its federation ends. A site restarts as a whole: the
+# federates of the site retry until this broker is up again.
+Restart=always
+RestartSec=5
+
+# Hardening, as cm-federate@.service, with the same two exceptions for HELICS
+# 3.6.1 and its ZeroMQ: AF_NETLINK (getifaddrs), and @resources is not
+# filtered (sched_setscheduler on the I/O threads).
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

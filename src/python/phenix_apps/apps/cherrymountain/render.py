@@ -42,7 +42,7 @@ from .metadata import (
     SimCtlHost,
     SimFederateHost,
 )
-from .sources import DebugMap, SourceError, Sources
+from .sources import SITE_PROGRAM_VARIANT, DebugMap, SourceError, Sources
 
 TEMPLATES: Final[Path] = Path(__file__).parent / "templates"
 STARTUP: Final[str] = "/etc/phenix/startup"
@@ -314,7 +314,7 @@ def northbound(ctx: Context, hostname: str, md: OpenPlcHost) -> str:
 def render_openplc(ctx: Context, hostname: str, md: OpenPlcHost) -> list[Injection]:
     src: Sources = ctx.sources
     plugin_nb: str = northbound(ctx, hostname, md)
-    program: str = md.program or hostname
+    program: str = md.program or src.program_name(hostname)
     out: Path = ctx.host_dir(hostname) / "openplc"
     conf_out: Path = out / "conf"
     if conf_out.exists():
@@ -332,7 +332,15 @@ def render_openplc(ctx: Context, hostname: str, md: OpenPlcHost) -> list[Injecti
 
     plantgen_dir: Path = src.plc_conf_dir(program)
     stale: list[str] = src.zip_conf_drift(program, plantgen_dir)
-    if stale:
+    if stale and src.site is not None:
+        # A site runs the full variant's ZIP, whose plugin configs hold the
+        # Front Range addresses. The boot script replaces conf/ with the site's.
+        logger.info(
+            f"{hostname}: the {program} ZIP of the {SITE_PROGRAM_VARIANT} variant has "
+            f"other plugin configs than the site's ({', '.join(stale)}); the boot "
+            "script replaces them"
+        )
+    elif stale:
         # The boot script replaces conf/ anyway, but the program's located
         # variables were compiled against these maps (DESIGN.md 12.6).
         logger.warning(
@@ -742,6 +750,8 @@ def render_sim(
                     description="ground-truth Grafana dashboard",
                 )
             )
+    if ctx.app.site is not None and hostname == ctx.app.sim_ctl.hostname:
+        truth += render_broker(ctx, hostname, out)
     federates: list[str] = ctx.federates_of(hostname, md)
     if not federates:
         return truth
@@ -799,6 +809,66 @@ def render_sim(
     if isinstance(md, SimCtlHost) and "weather" in federates:
         injects += render_viz(ctx, hostname, out)
     return injects
+
+
+#: The HELICS broker unit of a site of the fleet, and its settings file.
+BROKER_UNIT: Final[str] = "cm-helics-broker.service"
+BROKER_SETTINGS: Final[str] = "/etc/default/cm-helics-broker"
+
+
+def render_broker(ctx: Context, hostname: str, out: Path) -> list[Injection]:
+    """The HELICS broker of a site of the fleet, on the site's own sim-ctl: its
+    settings, its hardened unit, and the startup hook.
+
+    The fleet has a broker for each site (docs/multisite/PLANS.md, decision
+    D8), and the phenix helics app has one root broker for an experiment, so
+    this app starts the broker of a site itself. The broker waits for
+    ``federate_count`` federates, which plantgen counts in the site's
+    helics.json, and it listens on the host's MGMT address only: the
+    site-brokers spike found that this keeps two federations on one network
+    apart."""
+    helics: Any = ctx.sources.generated_json("helics.json")
+    count: Any = helics.get("federate_count") if isinstance(helics, dict) else None
+    if not isinstance(count, int) or count < 1:
+        raise SourceError(
+            f"{ctx.sources.rel(ctx.sources.generated / 'helics.json')} has no "
+            "federate_count; the site's broker waits for that many federates"
+        )
+    env: Path = write(
+        out / "cm-helics-broker.env",
+        env_file(
+            {
+                "CM_BROKER_NAME": hostname,
+                "CM_BROKER_FEDERATES": count,
+                "CM_BROKER_ADDRESS": ctx.ip(hostname, ctx.app.mgmt.interface),
+            }
+        ),
+    )
+    return [
+        Injection(
+            src=env,
+            dst=BROKER_SETTINGS,
+            description="settings of the site's HELICS broker",
+        ),
+        *_packaged(
+            ctx,
+            hostname,
+            [
+                (
+                    ("systemd", BROKER_UNIT),
+                    f"/etc/systemd/system/{BROKER_UNIT}",
+                    "0644",
+                    "HELICS broker unit of the site",
+                ),
+                (
+                    ("scripts", "55-cm-helics-broker.sh"),
+                    f"{STARTUP}/55-cm-helics-broker.sh",
+                    "0755",
+                    "start the site's HELICS broker",
+                ),
+            ],
+        ),
+    ]
 
 
 def render_viz(ctx: Context, hostname: str, out: Path) -> list[Injection]:
