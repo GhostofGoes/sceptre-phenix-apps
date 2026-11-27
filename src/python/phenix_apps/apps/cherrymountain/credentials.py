@@ -10,6 +10,7 @@ Values never reach a log line or an exception message.
 from __future__ import annotations
 
 import base64
+import datetime
 import json
 import os
 import secrets
@@ -31,6 +32,22 @@ from .metadata import (
 TOKEN_BYTES: Final[int] = 24
 #: The characters of a console password (credentials.console_password).
 ALNUM_CHARS: Final[str] = string.ascii_letters + string.digits
+#: The certificate files that Malcolm and the sensors of an experiment share
+#: (credentials.sensor_certificates). The CA's key stays in the experiment
+#: directory.
+SENSOR_TLS_FILES: Final[tuple[str, ...]] = (
+    "ca.crt",
+    "server.crt",
+    "server.key",
+    "client.crt",
+    "client.key",
+)
+#: The life of Malcolm's own certificates for Logstash and Filebeat
+#: (auth_setup), which an experiment never reaches.
+SENSOR_TLS_DAYS: Final[int] = 3650
+#: Malcolm's own keys have 4096 bits. Three such keys take the configure stage
+#: several seconds longer, and 3072 bits are enough for a range.
+SENSOR_TLS_KEY_BITS: Final[int] = 3072
 
 
 class RangeSecrets(BaseModel):
@@ -181,3 +198,132 @@ def host_keys(store: Path, hosts: list[str], make: Callable[[], str]) -> dict[st
     if missing:
         _write_private(store, json.dumps(stored, indent=2, sort_keys=True) + "\n")
     return {h: stored[h] for h in hosts}
+
+
+def sensor_certificates(store: Path) -> dict[str, str]:
+    """The certificates between the sensors' Filebeat and Malcolm's Logstash,
+    as PEM text by file name (``SENSOR_TLS_FILES``).
+
+    Malcolm's ``auth_setup`` makes such a set on the host that runs Logstash
+    and hands the client's part to a sensor in an interactive transfer. The
+    range has no person at that prompt, so the app makes the set: a CA, a
+    server certificate for Logstash, and one client certificate that every
+    Filebeat uses, as Malcolm has one. The keys are PKCS #8, which the Beats
+    input of Logstash needs for the server's. The set is kept in the directory
+    ``store`` (each file 0600), so a restart of the experiment renders the
+    same one. An incomplete set is made again as a whole."""
+    names: tuple[str, ...] = ("ca.key", *SENSOR_TLS_FILES)
+    if all((store / name).is_file() for name in names):
+        return {
+            name: (store / name).read_text(encoding="utf-8")
+            for name in SENSOR_TLS_FILES
+        }
+
+    # Imported here: only an experiment with Malcolm and a sensor needs it.
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+    # A day back: a VM's clock can be behind this host's when Logstash starts.
+    start: datetime.datetime = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+        days=1
+    )
+    end: datetime.datetime = start + datetime.timedelta(days=SENSOR_TLS_DAYS)
+
+    def name_of(unit: str) -> x509.Name:
+        return x509.Name(
+            [
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CherryMountain range"),
+                x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, unit),
+                x509.NameAttribute(NameOID.COMMON_NAME, f"cm-sensor-{unit}"),
+            ]
+        )
+
+    def new_key() -> rsa.RSAPrivateKey:
+        return rsa.generate_private_key(
+            public_exponent=65537, key_size=SENSOR_TLS_KEY_BITS
+        )
+
+    def pem_key(key: rsa.RSAPrivateKey) -> str:
+        return key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("ascii")
+
+    def pem(certificate: x509.Certificate) -> str:
+        return certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+    def usage(ca: bool) -> x509.KeyUsage:
+        return x509.KeyUsage(
+            digital_signature=not ca,
+            content_commitment=False,
+            key_encipherment=not ca,
+            data_encipherment=not ca,
+            key_agreement=False,
+            key_cert_sign=ca,
+            crl_sign=ca,
+            encipher_only=False,
+            decipher_only=False,
+        )
+
+    ca_key: rsa.RSAPrivateKey = new_key()
+    ca_name: x509.Name = name_of("ca")
+    ca_certificate: x509.Certificate = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(start)
+        .not_valid_after(end)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(usage(ca=True), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    def leaf(unit: str) -> tuple[str, str]:
+        """A certificate of the CA, with its key. As Malcolm's own, it may be
+        a server's and a client's."""
+        key: rsa.RSAPrivateKey = new_key()
+        certificate: x509.Certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name_of(unit))
+            .issuer_name(ca_name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(start)
+            .not_valid_after(end)
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
+            .add_extension(usage(ca=False), critical=True)
+            .add_extension(
+                x509.ExtendedKeyUsage(
+                    [ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH]
+                ),
+                critical=False,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+        return pem(certificate), pem_key(key)
+
+    made: dict[str, str] = {"ca.key": pem_key(ca_key), "ca.crt": pem(ca_certificate)}
+    made["server.crt"], made["server.key"] = leaf("server")
+    made["client.crt"], made["client.key"] = leaf("client")
+    for name in names:
+        _write_private(store / name, made[name])
+    return {name: made[name] for name in SENSOR_TLS_FILES}

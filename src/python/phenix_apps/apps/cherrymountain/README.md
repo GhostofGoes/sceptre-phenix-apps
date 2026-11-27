@@ -416,6 +416,33 @@ agree. The app writes and injects each file that holds a credential with mode
   script generates its own password as before. In both cases, the VMs keep a
   root-only copy (`/var/lib/cm-malcolm/admin-password`,
   `/var/lib/cm-wazuh/passwords.txt`). Thus the console path still works.
+- Network sensors: an experiment can have Malcolm and one or more network
+  sensors (the nodes to which the topology gives `cm-sensor-provision`). The
+  app then makes what the two sides share. No person has to do the interactive
+  transfer of Malcolm's `auth_setup`:
+  - `CM_SENSOR_PASSWORD`: the password of the account `sensor` at Malcolm. A
+    sensor's Arkime writes its sessions to Malcolm's OpenSearch with it
+    (9200/tcp). It is 24 letters and digits.
+  - `CM_ARKIME_SECRET`: the secret with which Malcolm's Arkime and the Arkime
+    of each sensor sign their requests (8005/tcp). It is 32 letters and digits.
+  - A certificate authority, a server certificate for Malcolm's Logstash, and
+    one client certificate that the Filebeat of every sensor uses (5044/tcp).
+    The keys are RSA with 3072 bits in PKCS #8, and the certificates are good
+    for ten years.
+
+  Malcolm gets the two values in `/etc/default/cm-malcolm-credentials` and the
+  five files `ca.crt`, `server.crt`, `server.key`, `client.crt`, and
+  `client.key` in `/etc/cherrymountain/sensor-tls/`. Each sensor gets the two
+  values in `/etc/default/cm-sensor-credentials` and `ca.crt`, `client.crt`,
+  and `client.key` in the same directory. Each file is 0600. The values are in
+  `<experiment dir>/cherrymountain/sensors.json`, and the certificates with
+  the key of the authority are in `<experiment dir>/cherrymountain/sensor-tls/`
+  (both 0600). A restart of the experiment renders the same ones.
+
+  The experiment of one site has Malcolm (the head office) or a sensor (each
+  other site), not both. The app then renders none of these files: Malcolm
+  opens no port for a sensor, and the first-boot script of a sensor leaves the
+  sensor idle.
 - WireGuard: with `wireguardKeys: generate`, configure replaces the private key
   of each `wireguard` host. The app keeps the new key in
   `<experiment dir>/cherrymountain/wireguard.json` (0600). The configure stage

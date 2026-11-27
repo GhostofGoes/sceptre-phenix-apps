@@ -19,7 +19,7 @@ import secrets
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, NamedTuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -29,9 +29,11 @@ from phenix_apps.common.logger import logger
 
 from . import brand
 from .credentials import (
+    SENSOR_TLS_FILES,
     RangeSecrets,
     console_password,
     host_keys,
+    sensor_certificates,
     totp_secret,
     write_private,
 )
@@ -2021,26 +2023,38 @@ MALCOLM_PROVISION: Final[str] = "/usr/local/sbin/cm-malcolm-provision"
 MALCOLM_CREDENTIALS: Final[str] = "/etc/default/cm-malcolm-credentials"
 
 
+def _taking(ctx: Context, dst: str) -> list[str]:
+    """The nodes that the topology gives the file ``dst``."""
+    return sorted(
+        name
+        for name, node in ctx.nodes.items()
+        if any(i.get("dst") == dst for i in node.get("injections") or [])
+    )
+
+
 def render_malcolm(ctx: Context) -> dict[str, list[Injection]]:
     """The web password of Malcolm's user ``malcolm`` (DESIGN.md 14) for every
     node the topology gives ``cm-malcolm-provision``. The topology owns
     ``/etc/default/cm-malcolm`` (the sizing profile and the capture port, world
     readable); the password goes into a file of its own that only the
-    provisioning unit reads, so it does not reach the sensor's other services."""
-    hosts: list[str] = sorted(
-        name
-        for name, node in ctx.nodes.items()
-        if any(i.get("dst") == MALCOLM_PROVISION for i in node.get("injections") or [])
-    )
+    provisioning unit reads, so it does not reach the sensor's other services.
+
+    In an experiment that also has a network sensor (``sensor_link``), the
+    file holds the sensors' two values too, and the node gets the five
+    certificate files. ``cm-malcolm-provision`` then opens Logstash and
+    OpenSearch to the sensors."""
+    link: SensorLink | None = sensor_link(ctx)
     out: dict[str, list[Injection]] = {}
-    for host in hosts:
+    for host in _taking(ctx, MALCOLM_PROVISION):
+        values: dict[str, str | int] = {
+            "MALCOLM_ADMIN_PASSWORD": ctx.creds.malcolm_password.get_secret_value()
+        }
+        if link is not None:
+            values["CM_SENSOR_PASSWORD"] = link.password
+            values["CM_ARKIME_SECRET"] = link.secret
         src: Path = write(
             ctx.host_dir(host) / "malcolm" / "cm-malcolm-credentials.env",
-            env_file(
-                {
-                    "MALCOLM_ADMIN_PASSWORD": ctx.creds.malcolm_password.get_secret_value()
-                }
-            ),
+            env_file(values),
             private=True,
         )
         out[host] = [
@@ -2050,6 +2064,112 @@ def render_malcolm(ctx: Context) -> dict[str, list[Injection]]:
                 description="Malcolm web password (per-experiment)",
                 permissions="0600",
             )
+        ]
+        if link is not None:
+            out[host] += _sensor_tls(ctx, host, link, SENSOR_TLS_AT_MALCOLM)
+    return out
+
+
+# ---------------------------------------------------------------- sensors
+
+#: The script that the topology of a site injects on its network sensor
+#: (phenix-injects/sensor), the file that its unit reads for what the app
+#: renders, and the directory of the certificate files, on a sensor and on
+#: Malcolm.
+SENSOR_PROVISION: Final[str] = "/usr/local/sbin/cm-sensor-provision"
+SENSOR_CREDENTIALS: Final[str] = "/etc/default/cm-sensor-credentials"
+SENSOR_TLS: Final[str] = "/etc/cherrymountain/sensor-tls"
+#: Malcolm runs Logstash and a Filebeat of its own. A sensor runs Filebeat.
+SENSOR_TLS_AT_MALCOLM: Final[tuple[str, ...]] = SENSOR_TLS_FILES
+SENSOR_TLS_AT_SENSOR: Final[tuple[str, ...]] = ("ca.crt", "client.crt", "client.key")
+#: The secret is longer than a password: nobody types it.
+ARKIME_SECRET_LENGTH: Final[int] = 32
+
+
+class SensorLink(NamedTuple):
+    """What Malcolm and the sensors of one experiment share."""
+
+    #: The password of the account ``sensor`` at Malcolm (OpenSearch, 9200/tcp).
+    password: str
+    #: The secret that Malcolm's Arkime and each sensor's Arkime sign with.
+    secret: str
+    #: The certificate files by name (``credentials.sensor_certificates``).
+    certificates: dict[str, str]
+
+
+def sensor_link(ctx: Context) -> SensorLink | None:
+    """The credentials between Malcolm and the sensors, or None when the
+    experiment does not have both.
+
+    An experiment of one site alone has Malcolm and no sensor (the head
+    office) or a sensor and no Malcolm (any other site). Then the app renders
+    nothing of this: Malcolm opens no port, and the sensor stays idle. The
+    two scripts of the topology read letters and digits only, which a console
+    password is. The values are kept in ``sensors.json`` and ``sensor-tls``
+    (0600), so a restart renders the same ones."""
+    if not _taking(ctx, MALCOLM_PROVISION) or not _taking(ctx, SENSOR_PROVISION):
+        return None
+    store: Path = ctx.out_dir / "sensors.json"
+    password: str = host_keys(store, ["sensor_password"], console_password)[
+        "sensor_password"
+    ]
+    secret: str = host_keys(
+        store, ["arkime_secret"], lambda: console_password(ARKIME_SECRET_LENGTH)
+    )["arkime_secret"]
+    return SensorLink(
+        password=password,
+        secret=secret,
+        certificates=sensor_certificates(ctx.out_dir / "sensor-tls"),
+    )
+
+
+def _sensor_tls(
+    ctx: Context, host: str, link: SensorLink, names: tuple[str, ...]
+) -> list[Injection]:
+    """The certificate files of one node, each readable by root only."""
+    return [
+        Injection(
+            src=write(
+                ctx.host_dir(host) / "sensor-tls" / name,
+                link.certificates[name],
+                private=True,
+            ),
+            dst=f"{SENSOR_TLS}/{name}",
+            description=f"certificates between the sensors and Malcolm: {name}",
+            permissions="0600",
+        )
+        for name in names
+    ]
+
+
+def render_sensors(ctx: Context) -> dict[str, list[Injection]]:
+    """The account at Malcolm, the Arkime secret, and Filebeat's client
+    certificate for every node the topology gives ``cm-sensor-provision``
+    (docs/multisite/PLANS.md 4.6 of the topology repository).
+
+    Without a Malcolm in the experiment a sensor gets none of them, and its
+    first-boot script leaves it idle."""
+    link: SensorLink | None = sensor_link(ctx)
+    if link is None:
+        return {}
+    out: dict[str, list[Injection]] = {}
+    for host in _taking(ctx, SENSOR_PROVISION):
+        src: Path = write(
+            ctx.host_dir(host) / "sensor" / "cm-sensor-credentials.env",
+            env_file(
+                {"CM_SENSOR_PASSWORD": link.password, "CM_ARKIME_SECRET": link.secret}
+            ),
+            private=True,
+        )
+        out[host] = [
+            Injection(
+                src=src,
+                dst=SENSOR_CREDENTIALS,
+                description="the sensor's account at Malcolm and the Arkime secret "
+                "(per-experiment)",
+                permissions="0600",
+            ),
+            *_sensor_tls(ctx, host, link, SENSOR_TLS_AT_SENSOR),
         ]
     return out
 
@@ -2177,6 +2297,7 @@ def render_all(ctx: Context) -> dict[str, list[Injection]]:
     for step in (
         render_wazuh,
         render_malcolm,
+        render_sensors,
         render_mgmt,
         render_vendor,
         render_staff,
