@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: GhostofGoes/sceptre-phenix-topologies
-          ref: 8cc20f77cf60296186760c79a847a37bca23a3a9 # feat-cherrymountain-multisite
+          ref: 0ae5c7a74260a548740cbb98b35f67d90c6bd1b8 # feat-cherrymountain-multisite
           path: topologies
           sparse-checkout: cherrymountain-brewery
           lfs: true
