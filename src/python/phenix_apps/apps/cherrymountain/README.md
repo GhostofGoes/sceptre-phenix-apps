@@ -110,6 +110,7 @@ App block:
 | `verify.timeout`, `verify.clientGrace` | seconds | `15`, `5` | The timeouts of each check in post-start and running |
 | `verify.recheck` | `unprovisioned` or `all` | `unprovisioned` | The hosts that `running` asks again. A check sets the cc filter of minimega for a moment, and a namespace has only one such filter. In that moment, a command that the soh app of phenix or a SCORCH component sends from another process goes to the wrong VM. Thus, by default, the stage does not ask a host again after the host is `provisioned`. The app then keeps the state until the next start, and a settled plant gets no cc commands from this app. `all` asks every host on every pass. State of health is the check for a service that stops later |
 | `vendorTechnicians` | list of short names | `[akim, jdiaz]` | The technicians of Ridgeline. Each technician gets a named Guacamole account (`ridgeline-<name>`) with its own TOTP key, and its own EWS account (DESIGN.md 13). The scripted session of vendor-ws signs in as the first technician |
+| `staffAccounts` | list of account names | `[]` | The company's own staff at the jump host of a site that the vendor does not reach, for example `[corp-controls, ep-maint]`. The generated scenario of such a site sets the list from `plant/sites.yaml` (`staff`). Each account gets a Guacamole password, a TOTP key, and an EWS password for the experiment. A name does not start with `ridgeline-` |
 | `exportOnCleanup` | bool | `true` | The app runs the cleanup exports |
 
 Host metadata, which `type` selects:
@@ -352,6 +353,15 @@ agree. The app writes and injects each file that holds a credential with mode
   `<experiment dir>/cherrymountain/
   vendor.json` (0600). The rendered file replaces the committed copy. Thus the
   three nodes always agree, and the values change with each experiment.
+- Staff accounts: the app renders `staff.env` for every node to which the
+  topology of a site gives that file (the `dmz-jump` and the `ews` of the
+  site). For each account of `staffAccounts`, the file holds the Guacamole
+  password, the TOTP key, and the EWS password. A person types the two
+  passwords, so they have letters and digits only. The app keeps the values in
+  `<experiment dir>/cherrymountain/staff.json` (0600). The rendered file
+  replaces the copy of the site, whose values are placeholders that everyone
+  can read. The app stops when nodes take the file and `staffAccounts` is
+  empty, and when `staffAccounts` has accounts and no node takes the file.
 - FUXA accounts: both FUXA hosts get two accounts. `admin` is the editor
   account (`fuxaPassword`). `operator` (`fuxaOperatorPassword`) is in the
   Operator group of FUXA (`groups: 2`). This account can write tags from a view

@@ -11,8 +11,11 @@ stop fitting each other.
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any, Final
@@ -56,6 +59,9 @@ FUXA: Final[dict[str, list[str]]] = {
 JUMP_HOST: Final[set[str]] = {"fr", "ep"}
 WORKSTATION: Final[set[str]] = {"fr", "ep", "cs"}
 WAZUH: Final[set[str]] = {"fr"}
+#: The sites whose own jump host has accounts of the company's staff
+#: (plant/sites.yaml, `staff`), with the accounts.
+STAFF: Final[dict[str, list[str]]] = {"ep": ["corp-controls", "ep-maint"]}
 #: The MGMT network of each site: 172.16.0.0/16 moved by the site's index.
 MGMT: Final[dict[str, str]] = {
     "fr": "172.16.",
@@ -150,6 +156,7 @@ def test_the_generated_scenario_names_its_site(code: str, site: dict[str, Any]) 
         "site": code,
         "sourceDir": str(ROOT),
         **({"wazuh": app_block(site)["metadata"]["wazuh"]} if code in WAZUH else {}),
+        **({"staffAccounts": STAFF[code]} if code in STAFF else {}),
     }
     names: list[str] = [a["name"] for a in site["spec"]["scenario"]["apps"]]
     assert names == ["startup", "ot-sim", "cherrymountain", "ntp", "vrouter", "soh"]
@@ -389,6 +396,137 @@ def test_the_pub_is_one_scada_host_and_no_wazuh(
     assert sorted(p.name for p in (app.sources.generated / "fuxa").iterdir()) == [
         "fc-scada-fuxa-tags.json"
     ]
+
+
+# ------------------------------------------------------------ the staff accounts
+
+#: The site's copy of the roster, with placeholder values that anyone can read.
+COMMITTED_ROSTER: Final[str] = "phenix-injects/fleet/{code}/guacamole/staff.env"
+
+
+def test_the_staff_accounts_of_a_site_get_credentials_of_the_experiment(
+    code: str, ctx: Context, plan: dict[str, list[Injection]]
+) -> None:
+    """The jump host and the workstation of a site with staff accounts get one
+    roster, and no value of it is the committed placeholder."""
+    takers: dict[str, Injection] = {
+        host: by_dst(injects)[render.STAFF_ENV]
+        for host, injects in plan.items()
+        if render.STAFF_ENV in by_dst(injects)
+    }
+    assert list(ctx.app.staff_accounts) == STAFF.get(code, [])
+    if code not in STAFF:
+        assert takers == {}
+        assert not (ctx.out_dir / "staff.json").exists()
+        return
+    assert set(takers) == {f"{code}-dmz-jump", f"{code}-ews"}
+    texts: set[str] = {
+        Path(inject.src).read_text(encoding="utf-8") for inject in takers.values()
+    }
+    assert len(texts) == 1
+    for inject in takers.values():
+        assert inject.permissions == "0600"
+        assert Path(inject.src).stat().st_mode & 0o077 == 0
+    values: dict[str, str] = env(Path(takers[f"{code}-ews"].src))
+    committed: dict[str, str] = env(ROOT / COMMITTED_ROSTER.format(code=code))
+    assert set(values) == set(committed)
+    assert values["STAFF_COUNT"] == committed["STAFF_COUNT"] == str(len(STAFF[code]))
+    secret: list[str] = []
+    for n, account in enumerate(STAFF[code], 1):
+        assert values[f"STAFF{n}_USER"] == committed[f"STAFF{n}_USER"] == account
+        for key in ("GUAC_PASSWORD", "TOTP_SECRET", "EWS_PASSWORD"):
+            value: str = values[f"STAFF{n}_{key}"]
+            assert value, (account, key)
+            assert value != committed[f"STAFF{n}_{key}"], (account, key)
+            secret.append(value)
+        assert len(base64.b32decode(values[f"STAFF{n}_TOTP_SECRET"])) == 20
+        # A person types the passwords: letters and digits only.
+        assert values[f"STAFF{n}_GUAC_PASSWORD"].isalnum()
+        assert values[f"STAFF{n}_EWS_PASSWORD"].isalnum()
+    assert len(set(secret)) == len(secret)
+    # A restart of the experiment renders the same roster.
+    again: Injection = by_dst(render.render_staff(ctx)[f"{code}-ews"])[render.STAFF_ENV]
+    assert env(Path(again.src)) == values
+    assert (ctx.out_dir / "staff.json").stat().st_mode & 0o077 == 0
+
+
+def test_the_jump_hosts_script_takes_the_roster_that_the_app_renders(
+    tmp_path: Path, run_app: RunApp
+) -> None:
+    """cm-guacamole-start gives the rendered file to cm_staff_sql.py of the
+    topology, as here. The SQL names every account and no placeholder."""
+    exp = site_experiment("ep", tmp_path / "exp")
+    app: CherryMountain = run_app("configure", exp=exp)
+    assert app.config is not None
+    assert app.sources is not None
+    made: dict[str, list[Injection]] = render.render_staff(
+        app._context(app.config, app.sources)
+    )
+    roster = Path(by_dst(made["ep-dmz-jump"])[render.STAFF_ENV].src)
+    script: Path = ROOT / "phenix-injects" / "guacamole" / "cm_staff_sql.py"
+    done = subprocess.run(
+        [sys.executable, "-I", str(script), "--env", str(roster), "--salt", "ab" * 32],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd="/",
+    )
+    assert done.returncode == 0, done.stderr
+    values: dict[str, str] = env(roster)
+    for n, account in enumerate(STAFF["ep"], 1):
+        assert f"VALUES ('{account}', 'USER') ON CONFLICT DO NOTHING;" in done.stdout
+        assert (
+            f"'guac-totp-key-secret', '{values[f'STAFF{n}_TOTP_SECRET']}'"
+            in done.stdout
+        )
+        assert f"'password', '{values[f'STAFF{n}_EWS_PASSWORD']}'" in done.stdout
+        assert f"ews-rdp-{account}" in done.stdout
+        assert f"ews-ssh-{account}" in done.stdout
+    assert done.stdout.rstrip().endswith("COMMIT;")
+
+
+def test_a_roster_with_no_account_or_with_no_node_is_refused(
+    run_app: RunApp, tmp_path: Path
+) -> None:
+    """Without `staffAccounts`, the two nodes would keep the committed
+    placeholders. With it and no node that takes the roster, nobody would get
+    an account. The app stops at both."""
+    exp = site_experiment("ep", tmp_path / "ep")
+    del app_block(exp)["metadata"]["staffAccounts"]
+    app: CherryMountain = run_app("configure", exp=exp)
+    assert app.config is not None
+    assert app.sources is not None
+    with pytest.raises(render.SourceError) as none:
+        render.render_staff(app._context(app.config, app.sources))
+    assert "ep-dmz-jump, ep-ews" in str(none.value)
+    assert "metadata.staffAccounts names no account" in str(none.value)
+
+    exp = site_experiment("cs", tmp_path / "cs")
+    app_block(exp)["metadata"]["staffAccounts"] = ["cs-maint"]
+    app = run_app("configure", exp=exp)
+    assert app.config is not None
+    assert app.sources is not None
+    with pytest.raises(render.SourceError) as nobody:
+        render.render_staff(app._context(app.config, app.sources))
+    assert "names cs-maint, and no node" in str(nobody.value)
+
+
+@pytest.mark.parametrize(
+    ("accounts", "said"),
+    [
+        (["ep-maint", "ep-maint"], "staffAccounts must not repeat an account"),
+        (["ridgeline-akim"], "the prefix of the vendor's technicians"),
+        (["Corp Controls"], "metadata.staffAccounts"),
+        ([f"staff-{n}" for n in range(9)], "metadata.staffAccounts"),
+    ],
+    ids=["twice", "a-vendor-name", "not-an-account-name", "too-many"],
+)
+def test_a_wrong_staff_account_is_reported(
+    run_app: RunApp, tmp_path: Path, accounts: list[str], said: str
+) -> None:
+    exp = site_experiment("ep", tmp_path / "exp")
+    app_block(exp)["metadata"]["staffAccounts"] = accounts
+    assert said in refused(run_app, exp)
 
 
 def refused(run_app: RunApp, exp: dict[str, Any]) -> str:

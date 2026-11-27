@@ -28,8 +28,15 @@ from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
 
 from . import brand
-from .credentials import RangeSecrets, host_keys, totp_secret, write_private
+from .credentials import (
+    RangeSecrets,
+    console_password,
+    host_keys,
+    totp_secret,
+    write_private,
+)
 from .metadata import (
+    VENDOR_PREFIX,
     AppMetadata,
     EwsHost,
     FuxaHost,
@@ -1700,8 +1707,8 @@ def render_otsim(
 
 #: Where the topology injects the vendor persona (dmz-jump, ews, vendor-ws).
 VENDOR_ENV: Final[str] = "/etc/cherrymountain/ridgeline.env"
-#: Every technician's Guacamole and EWS account is ``ridgeline-<name>``.
-VENDOR_PREFIX: Final[str] = "ridgeline-"
+#: Every technician's Guacamole and EWS account is ``ridgeline-<name>``
+#: (``metadata.VENDOR_PREFIX``).
 
 
 def vendor_roster(ctx: Context) -> list[dict[str, str]]:
@@ -1779,6 +1786,98 @@ def render_vendor(ctx: Context) -> dict[str, list[Injection]]:
                 src=src,
                 dst=VENDOR_ENV,
                 description="vendor persona (per-experiment credentials)",
+                permissions="0600",
+            )
+        ]
+    return out
+
+
+# ---------------------------------------------------------------- staff accounts
+
+#: Where the topology of a site injects the roster of its staff accounts (the
+#: site's dmz-jump and ews).
+STAFF_ENV: Final[str] = "/etc/cherrymountain/staff.env"
+
+
+def staff_roster(ctx: Context) -> list[dict[str, str]]:
+    """One named account for each of ``staffAccounts``, with credentials of
+    this experiment kept in ``staff.json`` (0600), so a restart renders the
+    same values. A person types the two passwords, so they are console
+    passwords."""
+    names: list[str] = list(ctx.app.staff_accounts)
+    store: Path = ctx.out_dir / "staff.json"
+    guac: dict[str, str] = host_keys(
+        store, [f"{name}.guac" for name in names], console_password
+    )
+    ews: dict[str, str] = host_keys(
+        store, [f"{name}.ews" for name in names], console_password
+    )
+    totp: dict[str, str] = host_keys(
+        store, [f"{name}.totp" for name in names], totp_secret
+    )
+    return [
+        {
+            "user": name,
+            "guac": guac[f"{name}.guac"],
+            "totp": totp[f"{name}.totp"],
+            "ews": ews[f"{name}.ews"],
+        }
+        for name in names
+    ]
+
+
+def render_staff(ctx: Context) -> dict[str, list[Injection]]:
+    """The accounts of the company's own staff at the jump host of a site
+    (docs/multisite/PLANS.md 4.6 in the topology repository), with
+    per-experiment credentials, for every node the topology gives
+    ``staff.env``. The rendered file replaces the committed one, whose values
+    are placeholders that anyone can read, so the jump host's Guacamole
+    accounts and the workstation's accounts agree and change with every
+    experiment.
+
+    The roster comes from ``staffAccounts``. Nodes that take the file with no
+    account in the metadata would keep the placeholders, and accounts with no
+    node that takes the file would not exist: both are errors."""
+    hosts: list[str] = sorted(
+        name
+        for name, node in ctx.nodes.items()
+        if any(i.get("dst") == STAFF_ENV for i in node.get("injections") or [])
+    )
+    names: list[str] = list(ctx.app.staff_accounts)
+    if not hosts and not names:
+        return {}
+    if not names:
+        raise SourceError(
+            f"{', '.join(hosts)}: the topology injects {STAFF_ENV}, and "
+            "metadata.staffAccounts names no account; without it the nodes "
+            "keep the committed placeholder passwords"
+        )
+    if not hosts:
+        raise SourceError(
+            f"metadata.staffAccounts names {', '.join(names)}, and no node of "
+            f"the topology injects {STAFF_ENV}"
+        )
+    roster: list[dict[str, str]] = staff_roster(ctx)
+    values: dict[str, str | int] = {"STAFF_COUNT": len(roster)}
+    for n, person in enumerate(roster, 1):
+        values[f"STAFF{n}_USER"] = person["user"]
+        values[f"STAFF{n}_GUAC_PASSWORD"] = person["guac"]
+        values[f"STAFF{n}_TOTP_SECRET"] = person["totp"]
+        values[f"STAFF{n}_EWS_PASSWORD"] = person["ews"]
+    text: str = (
+        "# The staff accounts of this experiment, rendered by the cherrymountain app:\n"
+        "# one named Guacamole and EWS account for each of the company's own staff\n"
+        "# at this site's jump host. Range-only, generated per experiment.\n"
+        + env_file(values)
+    )
+    out: dict[str, list[Injection]] = {}
+    for host in hosts:
+        src: Path = write(ctx.host_dir(host) / "staff.env", text, private=True)
+        out[host] = [
+            Injection(
+                src=src,
+                dst=STAFF_ENV,
+                description="staff accounts (per-experiment credentials)",
                 permissions="0600",
             )
         ]
@@ -2075,7 +2174,13 @@ def render_all(ctx: Context) -> dict[str, list[Injection]]:
             add(name, renderer(ctx, name, md))
         except SourceError as ex:
             failures.append(f"{name}: {ex}")
-    for step in (render_wazuh, render_malcolm, render_mgmt, render_vendor):
+    for step in (
+        render_wazuh,
+        render_malcolm,
+        render_mgmt,
+        render_vendor,
+        render_staff,
+    ):
         try:
             for name, injects in step(ctx).items():
                 add(name, injects)

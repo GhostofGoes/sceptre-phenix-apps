@@ -14,7 +14,7 @@ strict mode, so ``"false"`` is not a bool and ``"502"`` is not a port.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal
 
 from pydantic import (
     AfterValidator,
@@ -44,6 +44,13 @@ ViewName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")]
 SiteCode = Annotated[str, Field(pattern=r"^[a-z]{2}$")]
 #: A vendor technician's short name; the accounts are ``ridgeline-<name>``.
 Technician = Annotated[str, Field(pattern=r"^[a-z][a-z0-9]{1,15}$")]
+#: An account of the company's own staff: a role, as plant/sites.yaml of the
+#: topology repository names it (``corp-controls``).
+StaffAccount = Annotated[
+    str, Field(pattern=r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$", max_length=31)
+]
+#: The start of a technician's account. The Wazuh rules for the vendor match it.
+VENDOR_PREFIX: Final[str] = "ridgeline-"
 
 
 def _no_parent(value: str) -> str:
@@ -321,6 +328,15 @@ class AppMetadata(Block):
     vendor_technicians: Annotated[
         list[Technician], Field(min_length=1, max_length=8)
     ] = Field(default_factory=lambda: ["akim", "jdiaz"])
+    #: The company's own staff with a named account on the jump host of a site
+    #: that the vendor does not reach (docs/multisite/PLANS.md 4.6 in the
+    #: topology repository). The generated scenario of such a site sets it from
+    #: plant/sites.yaml (``staff``). Each account gets a Guacamole password, a
+    #: TOTP key, and an EWS password for this experiment, in the ``staff.env``
+    #: that the site's topology gives its jump host and its workstation.
+    staff_accounts: Annotated[list[StaffAccount], Field(max_length=8)] = Field(
+        default_factory=list
+    )
     verify: Verify = Field(default_factory=Verify)
     #: Export FUXA alarm history, DAQ data, and an InfluxDB backup at cleanup.
     export_on_cleanup: bool = True
@@ -330,6 +346,19 @@ class AppMetadata(Block):
     def _unique_technicians(cls, value: list[str]) -> list[str]:
         if len(set(value)) != len(value):
             raise ValueError("vendorTechnicians must not repeat a name")
+        return value
+
+    @field_validator("staff_accounts")
+    @classmethod
+    def _staff_are_not_the_vendor(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("staffAccounts must not repeat an account")
+        vendor: list[str] = [name for name in value if name.startswith(VENDOR_PREFIX)]
+        if vendor:
+            raise ValueError(
+                f"staffAccounts {vendor} start with {VENDOR_PREFIX!r}, which is "
+                "the prefix of the vendor's technicians"
+            )
         return value
 
     @model_validator(mode="after")
