@@ -30,6 +30,7 @@ from .metadata import (
     AppMetadata,
     Block,
     HostBase,
+    site_defaults,
 )
 from .render import NORTHBOUND_PLUGIN
 
@@ -214,6 +215,9 @@ def parse(metadata: Any, hosts: list[Any], problems: list[Problem]) -> Parsed:
             for f, h in unknown_keys(entry.metadata, "metadata")
             if f != "metadata.sohProfile"
         ]
+    if app is not None:
+        # At a site of the fleet, a default host name gets the site's prefix.
+        app, parsed = site_defaults(app, parsed)
     return Parsed(app=app, hosts=parsed)
 
 

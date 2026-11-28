@@ -40,6 +40,7 @@ from .metadata import (
     SimFederateHost,
 )
 from .render import (
+    BROKER_UNIT,
     OTSIM_CONFIG,
     Context,
     Injection,
@@ -118,7 +119,9 @@ class CherryMountain(AppBase):
         nodes: dict[str, Any] = self._nodes()
         sources: Sources | None = None
         if parsed.app is not None:
-            sources = Sources(Path(parsed.app.source_dir), parsed.app.variant)
+            sources = Sources(
+                Path(parsed.app.source_dir), parsed.app.variant, parsed.app.site
+            )
             try:
                 plant: Any = sources.plant()
             except SourceError as ex:
@@ -128,6 +131,21 @@ class CherryMountain(AppBase):
             else:
                 check_topology(plant, parsed.hosts, nodes, problems)
             check_references(parsed.app, parsed.hosts, nodes, problems)
+            if parsed.app.site is not None and self.extract_app("helics") is not None:
+                # Both would start a broker on the site's sim-ctl, on the same
+                # ports: the second one exits, and nothing reports it.
+                problems.append(
+                    Problem(
+                        hostname=None,
+                        field="metadata.site",
+                        message=(
+                            "the scenario also has the helics app, which starts a "
+                            f"root broker on {parsed.app.sim_ctl.hostname}; a site of "
+                            "the fleet gets its broker from this app's unit"
+                        ),
+                        hint="remove the helics app block from the site's scenario",
+                    )
+                )
         enforce(problems)
         if parsed.app is None or sources is None:  # enforce raised already
             raise AppError(f"{self.name} app: metadata did not validate")
@@ -488,6 +506,9 @@ class CherryMountain(AppBase):
         for kind, unit in self.UNITS.items():
             if isinstance(md, kind):
                 units.append(unit)
+        if config.site is not None and name == config.sim_ctl.hostname:
+            # The site's own broker (render.render_broker).
+            units.append(BROKER_UNIT)
         if isinstance(md, (SimCtlHost, SimFederateHost)) and self.sources is not None:
             ctx_feds: list[str] = (
                 md.federates

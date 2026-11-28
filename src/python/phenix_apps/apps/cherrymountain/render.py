@@ -19,7 +19,7 @@ import secrets
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, NamedTuple
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -28,8 +28,17 @@ from phenix_apps.common import utils
 from phenix_apps.common.logger import logger
 
 from . import brand
-from .credentials import RangeSecrets, host_keys, totp_secret, write_private
+from .credentials import (
+    SENSOR_TLS_FILES,
+    RangeSecrets,
+    console_password,
+    host_keys,
+    sensor_certificates,
+    totp_secret,
+    write_private,
+)
 from .metadata import (
+    VENDOR_PREFIX,
     AppMetadata,
     EwsHost,
     FuxaHost,
@@ -42,7 +51,7 @@ from .metadata import (
     SimCtlHost,
     SimFederateHost,
 )
-from .sources import DebugMap, SourceError, Sources
+from .sources import SITE_PROGRAM_VARIANT, DebugMap, SourceError, Sources
 
 TEMPLATES: Final[Path] = Path(__file__).parent / "templates"
 STARTUP: Final[str] = "/etc/phenix/startup"
@@ -314,7 +323,7 @@ def northbound(ctx: Context, hostname: str, md: OpenPlcHost) -> str:
 def render_openplc(ctx: Context, hostname: str, md: OpenPlcHost) -> list[Injection]:
     src: Sources = ctx.sources
     plugin_nb: str = northbound(ctx, hostname, md)
-    program: str = md.program or hostname
+    program: str = md.program or src.program_name(hostname)
     out: Path = ctx.host_dir(hostname) / "openplc"
     conf_out: Path = out / "conf"
     if conf_out.exists():
@@ -332,7 +341,15 @@ def render_openplc(ctx: Context, hostname: str, md: OpenPlcHost) -> list[Injecti
 
     plantgen_dir: Path = src.plc_conf_dir(program)
     stale: list[str] = src.zip_conf_drift(program, plantgen_dir)
-    if stale:
+    if stale and src.site is not None:
+        # A site runs the full variant's ZIP, whose plugin configs hold the
+        # Front Range addresses. The boot script replaces conf/ with the site's.
+        logger.info(
+            f"{hostname}: the {program} ZIP of the {SITE_PROGRAM_VARIANT} variant has "
+            f"other plugin configs than the site's ({', '.join(stale)}); the boot "
+            "script replaces them"
+        )
+    elif stale:
         # The boot script replaces conf/ anyway, but the program's located
         # variables were compiled against these maps (DESIGN.md 12.6).
         logger.warning(
@@ -742,6 +759,8 @@ def render_sim(
                     description="ground-truth Grafana dashboard",
                 )
             )
+    if ctx.app.site is not None and hostname == ctx.app.sim_ctl.hostname:
+        truth += render_broker(ctx, hostname, out)
     federates: list[str] = ctx.federates_of(hostname, md)
     if not federates:
         return truth
@@ -799,6 +818,66 @@ def render_sim(
     if isinstance(md, SimCtlHost) and "weather" in federates:
         injects += render_viz(ctx, hostname, out)
     return injects
+
+
+#: The HELICS broker unit of a site of the fleet, and its settings file.
+BROKER_UNIT: Final[str] = "cm-helics-broker.service"
+BROKER_SETTINGS: Final[str] = "/etc/default/cm-helics-broker"
+
+
+def render_broker(ctx: Context, hostname: str, out: Path) -> list[Injection]:
+    """The HELICS broker of a site of the fleet, on the site's own sim-ctl: its
+    settings, its hardened unit, and the startup hook.
+
+    The fleet has a broker for each site (docs/multisite/PLANS.md, decision
+    D8), and the phenix helics app has one root broker for an experiment, so
+    this app starts the broker of a site itself. The broker waits for
+    ``federate_count`` federates, which plantgen counts in the site's
+    helics.json, and it listens on the host's MGMT address only: the
+    site-brokers spike found that this keeps two federations on one network
+    apart."""
+    helics: Any = ctx.sources.generated_json("helics.json")
+    count: Any = helics.get("federate_count") if isinstance(helics, dict) else None
+    if not isinstance(count, int) or count < 1:
+        raise SourceError(
+            f"{ctx.sources.rel(ctx.sources.generated / 'helics.json')} has no "
+            "federate_count; the site's broker waits for that many federates"
+        )
+    env: Path = write(
+        out / "cm-helics-broker.env",
+        env_file(
+            {
+                "CM_BROKER_NAME": hostname,
+                "CM_BROKER_FEDERATES": count,
+                "CM_BROKER_ADDRESS": ctx.ip(hostname, ctx.app.mgmt.interface),
+            }
+        ),
+    )
+    return [
+        Injection(
+            src=env,
+            dst=BROKER_SETTINGS,
+            description="settings of the site's HELICS broker",
+        ),
+        *_packaged(
+            ctx,
+            hostname,
+            [
+                (
+                    ("systemd", BROKER_UNIT),
+                    f"/etc/systemd/system/{BROKER_UNIT}",
+                    "0644",
+                    "HELICS broker unit of the site",
+                ),
+                (
+                    ("scripts", "55-cm-helics-broker.sh"),
+                    f"{STARTUP}/55-cm-helics-broker.sh",
+                    "0755",
+                    "start the site's HELICS broker",
+                ),
+            ],
+        ),
+    ]
 
 
 def render_viz(ctx: Context, hostname: str, out: Path) -> list[Injection]:
@@ -1630,8 +1709,8 @@ def render_otsim(
 
 #: Where the topology injects the vendor persona (dmz-jump, ews, vendor-ws).
 VENDOR_ENV: Final[str] = "/etc/cherrymountain/ridgeline.env"
-#: Every technician's Guacamole and EWS account is ``ridgeline-<name>``.
-VENDOR_PREFIX: Final[str] = "ridgeline-"
+#: Every technician's Guacamole and EWS account is ``ridgeline-<name>``
+#: (``metadata.VENDOR_PREFIX``).
 
 
 def vendor_roster(ctx: Context) -> list[dict[str, str]]:
@@ -1709,6 +1788,98 @@ def render_vendor(ctx: Context) -> dict[str, list[Injection]]:
                 src=src,
                 dst=VENDOR_ENV,
                 description="vendor persona (per-experiment credentials)",
+                permissions="0600",
+            )
+        ]
+    return out
+
+
+# ---------------------------------------------------------------- staff accounts
+
+#: Where the topology of a site injects the roster of its staff accounts (the
+#: site's dmz-jump and ews).
+STAFF_ENV: Final[str] = "/etc/cherrymountain/staff.env"
+
+
+def staff_roster(ctx: Context) -> list[dict[str, str]]:
+    """One named account for each of ``staffAccounts``, with credentials of
+    this experiment kept in ``staff.json`` (0600), so a restart renders the
+    same values. A person types the two passwords, so they are console
+    passwords."""
+    names: list[str] = list(ctx.app.staff_accounts)
+    store: Path = ctx.out_dir / "staff.json"
+    guac: dict[str, str] = host_keys(
+        store, [f"{name}.guac" for name in names], console_password
+    )
+    ews: dict[str, str] = host_keys(
+        store, [f"{name}.ews" for name in names], console_password
+    )
+    totp: dict[str, str] = host_keys(
+        store, [f"{name}.totp" for name in names], totp_secret
+    )
+    return [
+        {
+            "user": name,
+            "guac": guac[f"{name}.guac"],
+            "totp": totp[f"{name}.totp"],
+            "ews": ews[f"{name}.ews"],
+        }
+        for name in names
+    ]
+
+
+def render_staff(ctx: Context) -> dict[str, list[Injection]]:
+    """The accounts of the company's own staff at the jump host of a site
+    (docs/multisite/PLANS.md 4.6 in the topology repository), with
+    per-experiment credentials, for every node the topology gives
+    ``staff.env``. The rendered file replaces the committed one, whose values
+    are placeholders that anyone can read, so the jump host's Guacamole
+    accounts and the workstation's accounts agree and change with every
+    experiment.
+
+    The roster comes from ``staffAccounts``. Nodes that take the file with no
+    account in the metadata would keep the placeholders, and accounts with no
+    node that takes the file would not exist: both are errors."""
+    hosts: list[str] = sorted(
+        name
+        for name, node in ctx.nodes.items()
+        if any(i.get("dst") == STAFF_ENV for i in node.get("injections") or [])
+    )
+    names: list[str] = list(ctx.app.staff_accounts)
+    if not hosts and not names:
+        return {}
+    if not names:
+        raise SourceError(
+            f"{', '.join(hosts)}: the topology injects {STAFF_ENV}, and "
+            "metadata.staffAccounts names no account; without it the nodes "
+            "keep the committed placeholder passwords"
+        )
+    if not hosts:
+        raise SourceError(
+            f"metadata.staffAccounts names {', '.join(names)}, and no node of "
+            f"the topology injects {STAFF_ENV}"
+        )
+    roster: list[dict[str, str]] = staff_roster(ctx)
+    values: dict[str, str | int] = {"STAFF_COUNT": len(roster)}
+    for n, person in enumerate(roster, 1):
+        values[f"STAFF{n}_USER"] = person["user"]
+        values[f"STAFF{n}_GUAC_PASSWORD"] = person["guac"]
+        values[f"STAFF{n}_TOTP_SECRET"] = person["totp"]
+        values[f"STAFF{n}_EWS_PASSWORD"] = person["ews"]
+    text: str = (
+        "# The staff accounts of this experiment, rendered by the cherrymountain app:\n"
+        "# one named Guacamole and EWS account for each of the company's own staff\n"
+        "# at this site's jump host. Range-only, generated per experiment.\n"
+        + env_file(values)
+    )
+    out: dict[str, list[Injection]] = {}
+    for host in hosts:
+        src: Path = write(ctx.host_dir(host) / "staff.env", text, private=True)
+        out[host] = [
+            Injection(
+                src=src,
+                dst=STAFF_ENV,
+                description="staff accounts (per-experiment credentials)",
                 permissions="0600",
             )
         ]
@@ -1852,26 +2023,38 @@ MALCOLM_PROVISION: Final[str] = "/usr/local/sbin/cm-malcolm-provision"
 MALCOLM_CREDENTIALS: Final[str] = "/etc/default/cm-malcolm-credentials"
 
 
+def _taking(ctx: Context, dst: str) -> list[str]:
+    """The nodes that the topology gives the file ``dst``."""
+    return sorted(
+        name
+        for name, node in ctx.nodes.items()
+        if any(i.get("dst") == dst for i in node.get("injections") or [])
+    )
+
+
 def render_malcolm(ctx: Context) -> dict[str, list[Injection]]:
     """The web password of Malcolm's user ``malcolm`` (DESIGN.md 14) for every
     node the topology gives ``cm-malcolm-provision``. The topology owns
     ``/etc/default/cm-malcolm`` (the sizing profile and the capture port, world
     readable); the password goes into a file of its own that only the
-    provisioning unit reads, so it does not reach the sensor's other services."""
-    hosts: list[str] = sorted(
-        name
-        for name, node in ctx.nodes.items()
-        if any(i.get("dst") == MALCOLM_PROVISION for i in node.get("injections") or [])
-    )
+    provisioning unit reads, so it does not reach the sensor's other services.
+
+    In an experiment that also has a network sensor (``sensor_link``), the
+    file holds the sensors' two values too, and the node gets the five
+    certificate files. ``cm-malcolm-provision`` then opens Logstash and
+    OpenSearch to the sensors."""
+    link: SensorLink | None = sensor_link(ctx)
     out: dict[str, list[Injection]] = {}
-    for host in hosts:
+    for host in _taking(ctx, MALCOLM_PROVISION):
+        values: dict[str, str | int] = {
+            "MALCOLM_ADMIN_PASSWORD": ctx.creds.malcolm_password.get_secret_value()
+        }
+        if link is not None:
+            values["CM_SENSOR_PASSWORD"] = link.password
+            values["CM_ARKIME_SECRET"] = link.secret
         src: Path = write(
             ctx.host_dir(host) / "malcolm" / "cm-malcolm-credentials.env",
-            env_file(
-                {
-                    "MALCOLM_ADMIN_PASSWORD": ctx.creds.malcolm_password.get_secret_value()
-                }
-            ),
+            env_file(values),
             private=True,
         )
         out[host] = [
@@ -1881,6 +2064,112 @@ def render_malcolm(ctx: Context) -> dict[str, list[Injection]]:
                 description="Malcolm web password (per-experiment)",
                 permissions="0600",
             )
+        ]
+        if link is not None:
+            out[host] += _sensor_tls(ctx, host, link, SENSOR_TLS_AT_MALCOLM)
+    return out
+
+
+# ---------------------------------------------------------------- sensors
+
+#: The script that the topology of a site injects on its network sensor
+#: (phenix-injects/sensor), the file that its unit reads for what the app
+#: renders, and the directory of the certificate files, on a sensor and on
+#: Malcolm.
+SENSOR_PROVISION: Final[str] = "/usr/local/sbin/cm-sensor-provision"
+SENSOR_CREDENTIALS: Final[str] = "/etc/default/cm-sensor-credentials"
+SENSOR_TLS: Final[str] = "/etc/cherrymountain/sensor-tls"
+#: Malcolm runs Logstash and a Filebeat of its own. A sensor runs Filebeat.
+SENSOR_TLS_AT_MALCOLM: Final[tuple[str, ...]] = SENSOR_TLS_FILES
+SENSOR_TLS_AT_SENSOR: Final[tuple[str, ...]] = ("ca.crt", "client.crt", "client.key")
+#: The secret is longer than a password: nobody types it.
+ARKIME_SECRET_LENGTH: Final[int] = 32
+
+
+class SensorLink(NamedTuple):
+    """What Malcolm and the sensors of one experiment share."""
+
+    #: The password of the account ``sensor`` at Malcolm (OpenSearch, 9200/tcp).
+    password: str
+    #: The secret that Malcolm's Arkime and each sensor's Arkime sign with.
+    secret: str
+    #: The certificate files by name (``credentials.sensor_certificates``).
+    certificates: dict[str, str]
+
+
+def sensor_link(ctx: Context) -> SensorLink | None:
+    """The credentials between Malcolm and the sensors, or None when the
+    experiment does not have both.
+
+    An experiment of one site alone has Malcolm and no sensor (the head
+    office) or a sensor and no Malcolm (any other site). Then the app renders
+    nothing of this: Malcolm opens no port, and the sensor stays idle. The
+    two scripts of the topology read letters and digits only, which a console
+    password is. The values are kept in ``sensors.json`` and ``sensor-tls``
+    (0600), so a restart renders the same ones."""
+    if not _taking(ctx, MALCOLM_PROVISION) or not _taking(ctx, SENSOR_PROVISION):
+        return None
+    store: Path = ctx.out_dir / "sensors.json"
+    password: str = host_keys(store, ["sensor_password"], console_password)[
+        "sensor_password"
+    ]
+    secret: str = host_keys(
+        store, ["arkime_secret"], lambda: console_password(ARKIME_SECRET_LENGTH)
+    )["arkime_secret"]
+    return SensorLink(
+        password=password,
+        secret=secret,
+        certificates=sensor_certificates(ctx.out_dir / "sensor-tls"),
+    )
+
+
+def _sensor_tls(
+    ctx: Context, host: str, link: SensorLink, names: tuple[str, ...]
+) -> list[Injection]:
+    """The certificate files of one node, each readable by root only."""
+    return [
+        Injection(
+            src=write(
+                ctx.host_dir(host) / "sensor-tls" / name,
+                link.certificates[name],
+                private=True,
+            ),
+            dst=f"{SENSOR_TLS}/{name}",
+            description=f"certificates between the sensors and Malcolm: {name}",
+            permissions="0600",
+        )
+        for name in names
+    ]
+
+
+def render_sensors(ctx: Context) -> dict[str, list[Injection]]:
+    """The account at Malcolm, the Arkime secret, and Filebeat's client
+    certificate for every node the topology gives ``cm-sensor-provision``
+    (docs/multisite/PLANS.md 4.6 of the topology repository).
+
+    Without a Malcolm in the experiment a sensor gets none of them, and its
+    first-boot script leaves it idle."""
+    link: SensorLink | None = sensor_link(ctx)
+    if link is None:
+        return {}
+    out: dict[str, list[Injection]] = {}
+    for host in _taking(ctx, SENSOR_PROVISION):
+        src: Path = write(
+            ctx.host_dir(host) / "sensor" / "cm-sensor-credentials.env",
+            env_file(
+                {"CM_SENSOR_PASSWORD": link.password, "CM_ARKIME_SECRET": link.secret}
+            ),
+            private=True,
+        )
+        out[host] = [
+            Injection(
+                src=src,
+                dst=SENSOR_CREDENTIALS,
+                description="the sensor's account at Malcolm and the Arkime secret "
+                "(per-experiment)",
+                permissions="0600",
+            ),
+            *_sensor_tls(ctx, host, link, SENSOR_TLS_AT_SENSOR),
         ]
     return out
 
@@ -2005,7 +2294,14 @@ def render_all(ctx: Context) -> dict[str, list[Injection]]:
             add(name, renderer(ctx, name, md))
         except SourceError as ex:
             failures.append(f"{name}: {ex}")
-    for step in (render_wazuh, render_malcolm, render_mgmt, render_vendor):
+    for step in (
+        render_wazuh,
+        render_malcolm,
+        render_sensors,
+        render_mgmt,
+        render_vendor,
+        render_staff,
+    ):
         try:
             for name, injects in step(ctx).items():
                 add(name, injects)

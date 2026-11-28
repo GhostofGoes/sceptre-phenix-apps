@@ -2,8 +2,8 @@
 
 plantevent is a SCORCH component. It injects operational events into the
 CherryMountain Brewery simulation through the sim-ctl event API
-([DESIGN.md 9.5](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#95-scenario-events-and-ground-truth),
-[15.6](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#156-scorch-pipelines)).
+([DESIGN.md 9.5](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#95-scenario-events-and-ground-truth),
+[15.6](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#156-scorch-pipelines)).
 An operational event is a change in the plant, for example a utility outage.
 sim-ctl is the VM that runs the event API.
 The simulation is part of the `cherrymountain-brewery` topology. The

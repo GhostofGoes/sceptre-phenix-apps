@@ -2,16 +2,16 @@
 
 cherrymountain is a phenix user app that provisions the CherryMountain Brewery
 topology
-([DESIGN.md 16](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#16-new-and-extended-software)).
+([DESIGN.md 16](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#16-new-and-extended-software)).
 To provision a topology is to prepare its VMs for use. The app makes sure that
 the scenario agrees with `plant/plant.yaml`. It renders every per-host file
 that the VMs need at boot. It monitors provisioning, and it exports the data of
 the run at the end.
 
-The topology is the `cherrymountain-brewery` directory of
-[sceptre-phenix-topologies](https://github.com/GhostofGoes/sceptre-phenix-topologies/tree/feat-secret-topo/cherrymountain-brewery)
-(branch `feat-secret-topo` of the fork). "DESIGN.md" below is the
-`docs/DESIGN.md` file of that directory. The app does nothing without that
+The topology is the [brew](https://github.com/GhostofGoes/brew) repository. A
+range has a clone of it at `/phenix/topologies/cherrymountain-brewery`, and
+"the topology directory" below is that clone. "DESIGN.md" below is the
+`docs/DESIGN.md` file of that repository. The app does nothing without that
 directory ([Inputs it reads](#inputs-it-reads)).
 
 ```
@@ -25,7 +25,7 @@ stages: configure, pre-start, post-start, running, cleanup
 Put the app after `ot-sim` and before `helics`. ot-sim annotates the field
 devices with `helics/federate`. This app annotates the sim-* federate nodes.
 helics counts both
-([DESIGN.md 15.2](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#152-apps)).
+([DESIGN.md 15.2](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#152-apps)).
 A federate is one program of the HELICS co-simulation.
 
 In the full scenario, the `mirror` app comes before this app. In each stage,
@@ -81,7 +81,8 @@ App block:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `variant` | name | required | The variant from plant.yaml (`ci`, `lite`, `full`) |
+| `variant` | name | required | The variant from plant.yaml (`ci`, `lite`, `full`). For a site of the fleet, it is the code of the site |
+| `site` | two letters | none | The code of one site of the fleet, from `plant/sites.yaml` ([A site of the fleet](#a-site-of-the-fleet)). Without this key, the experiment is the single site |
 | `sourceDir` | absolute path | `/phenix/topologies/cherrymountain-brewery` | The topology directory |
 | `simCtl.hostname` | hostname | `sim-ctl` | The host of the HELICS root broker and the event API |
 | `simCtl.eventPort` | port | `8080` | The port of the event API inside sim-ctl |
@@ -109,6 +110,7 @@ App block:
 | `verify.timeout`, `verify.clientGrace` | seconds | `15`, `5` | The timeouts of each check in post-start and running |
 | `verify.recheck` | `unprovisioned` or `all` | `unprovisioned` | The hosts that `running` asks again. A check sets the cc filter of minimega for a moment, and a namespace has only one such filter. In that moment, a command that the soh app of phenix or a SCORCH component sends from another process goes to the wrong VM. Thus, by default, the stage does not ask a host again after the host is `provisioned`. The app then keeps the state until the next start, and a settled plant gets no cc commands from this app. `all` asks every host on every pass. State of health is the check for a service that stops later |
 | `vendorTechnicians` | list of short names | `[akim, jdiaz]` | The technicians of Ridgeline. Each technician gets a named Guacamole account (`ridgeline-<name>`) with its own TOTP key, and its own EWS account (DESIGN.md 13). The scripted session of vendor-ws signs in as the first technician |
+| `staffAccounts` | list of account names | `[]` | The company's own staff at the jump host of a site that the vendor does not reach, for example `[corp-controls, ep-maint]`. The generated scenario of such a site sets the list from `plant/sites.yaml` (`staff`). Each account gets a Guacamole password, a TOTP key, and an EWS password for the experiment. A name does not start with `ridgeline-` |
 | `exportOnCleanup` | bool | `true` | The app runs the cleanup exports |
 
 Host metadata, which `type` selects:
@@ -135,11 +137,51 @@ the node or not. The files are `/etc/cherrymountain/nftables-mgmt.nft`,
 The policy only matches the MGMT interface. It allows ICMP echo, HELICS,
 OpenSearch, and NTP to sim-ctl. It also allows HELICS from the broker to the
 federate cores. It drops everything else on MGMT
-([DESIGN.md 10.1](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#101-zones-and-conduits-purdue-model--isaiec-62443)).
+([DESIGN.md 10.1](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#101-zones-and-conduits-purdue-model--isaiec-62443)).
 
 phenix does not rename the NICs of a guest. Thus the hook runs after
 `3_interfaces-start.sh`. It finds the device that holds the MGMT address and
 passes the name of the device to the ruleset (`nft -D mgmt_if=<device>`).
+
+## A site of the fleet
+
+The fleet has four breweries, and each one is a site. The generator writes
+the files of each site. The scenario of a site sets `site` in the app block.
+The key changes four things:
+
+| Part | Without `site` | With `site: fc` |
+|---|---|---|
+| Generated files | `plant/generated/<variant>/` | `plant/generated/fleet/fc/` |
+| The plant | plant.yaml, expanded for the variant | plant.yaml, expanded for the site by plantgen (`fleet.expand_site`). The hosts have the names and the addresses of the site |
+| Default host names | `sim-ctl`, `wazuh`, `scada-fuxa`, `ews` | `fc-sim-ctl`, `fc-wazuh`, `fc-scada-fuxa`, `fc-ews` |
+| HELICS broker | The phenix `helics` app starts the root broker | This app injects `cm-helics-broker.service` on the sim-ctl of the site |
+
+- A default host name gets the prefix only where the scenario gives no name. A
+  name in the scenario stays as it is.
+- A site does not need each kind of host. `fc` has one SCADA host, and it has
+  no workstation, no jump host, and no Wazuh. The app then renders nothing for
+  those kinds.
+- A site has no program ZIPs of its own. A PLC of a site runs the ZIP of the
+  `full` variant, under the name with no prefix (`fc-plc-cellar` runs
+  `plc-cellar`). The boot script replaces the plugin configuration in the ZIP
+  with that of the site.
+- `fuxa/build_project.py` builds the FUXA project of a site from the tag
+  lists of the site.
+
+The broker of a site: the fleet has one broker for each site, and the `helics`
+app has one root broker for an experiment. Thus the scenario of a site has no
+`helics` block. The app stops at configure when it finds one, because two
+brokers on one host fail without a message.
+
+- The unit runs `helics_broker --name <host> -f<count> --ipv4
+  --local_interface <MGMT address>`. The count is `federate_count` in the
+  `helics.json` of the site.
+- The broker listens on the MGMT address of its host only. A federate of a
+  different site then cannot join it by accident.
+- `55-cm-helics-broker.sh` starts the unit at boot. The federates try again
+  until the broker answers.
+- A site restarts as a whole. When the broker restarts, restart each federate
+  and each field device of the site.
 
 ## Example
 
@@ -311,6 +353,15 @@ agree. The app writes and injects each file that holds a credential with mode
   `<experiment dir>/cherrymountain/
   vendor.json` (0600). The rendered file replaces the committed copy. Thus the
   three nodes always agree, and the values change with each experiment.
+- Staff accounts: the app renders `staff.env` for every node to which the
+  topology of a site gives that file (the `dmz-jump` and the `ews` of the
+  site). For each account of `staffAccounts`, the file holds the Guacamole
+  password, the TOTP key, and the EWS password. A person types the two
+  passwords, so they have letters and digits only. The app keeps the values in
+  `<experiment dir>/cherrymountain/staff.json` (0600). The rendered file
+  replaces the copy of the site, whose values are placeholders that everyone
+  can read. The app stops when nodes take the file and `staffAccounts` is
+  empty, and when `staffAccounts` has accounts and no node takes the file.
 - FUXA accounts: both FUXA hosts get two accounts. `admin` is the editor
   account (`fuxaPassword`). `operator` (`fuxaOperatorPassword`) is in the
   Operator group of FUXA (`groups: 2`). This account can write tags from a view
@@ -365,6 +416,33 @@ agree. The app writes and injects each file that holds a credential with mode
   script generates its own password as before. In both cases, the VMs keep a
   root-only copy (`/var/lib/cm-malcolm/admin-password`,
   `/var/lib/cm-wazuh/passwords.txt`). Thus the console path still works.
+- Network sensors: an experiment can have Malcolm and one or more network
+  sensors (the nodes to which the topology gives `cm-sensor-provision`). The
+  app then makes what the two sides share. No person has to do the interactive
+  transfer of Malcolm's `auth_setup`:
+  - `CM_SENSOR_PASSWORD`: the password of the account `sensor` at Malcolm. A
+    sensor's Arkime writes its sessions to Malcolm's OpenSearch with it
+    (9200/tcp). It is 24 letters and digits.
+  - `CM_ARKIME_SECRET`: the secret with which Malcolm's Arkime and the Arkime
+    of each sensor sign their requests (8005/tcp). It is 32 letters and digits.
+  - A certificate authority, a server certificate for Malcolm's Logstash, and
+    one client certificate that the Filebeat of every sensor uses (5044/tcp).
+    The keys are RSA with 3072 bits in PKCS #8, and the certificates are good
+    for ten years.
+
+  Malcolm gets the two values in `/etc/default/cm-malcolm-credentials` and the
+  five files `ca.crt`, `server.crt`, `server.key`, `client.crt`, and
+  `client.key` in `/etc/cherrymountain/sensor-tls/`. Each sensor gets the two
+  values in `/etc/default/cm-sensor-credentials` and `ca.crt`, `client.crt`,
+  and `client.key` in the same directory. Each file is 0600. The values are in
+  `<experiment dir>/cherrymountain/sensors.json`, and the certificates with
+  the key of the authority are in `<experiment dir>/cherrymountain/sensor-tls/`
+  (both 0600). A restart of the experiment renders the same ones.
+
+  The experiment of one site has Malcolm (the head office) or a sensor (each
+  other site), not both. The app then renders none of these files: Malcolm
+  opens no port for a sensor, and the first-boot script of a sensor leaves the
+  sensor idle.
 - WireGuard: with `wireguardKeys: generate`, configure replaces the private key
   of each `wireguard` host. The app keeps the new key in
   `<experiment dir>/cherrymountain/wireguard.json` (0600). The configure stage
@@ -570,7 +648,7 @@ them:
 
 The tests run the app on a checkout of the topology directory, with its Git LFS
 files (`git lfs pull`). They find the checkout in `CHERRYMOUNTAIN_TOPOLOGY_DIR`,
-or in a `sceptre-phenix-topologies` checkout next to this repository
+or in a `brew` checkout next to this repository
 (`tests/topology.py`). Without a checkout, pytest skips the tests, and one
 skipped test gives the reason. The checks of the topology itself run the tests
 the same way from an installed package
@@ -581,6 +659,10 @@ the same way from an installed package
 export CHERRYMOUNTAIN_TOPOLOGY_DIR=/phenix/topologies/cherrymountain-brewery
 make test TEST=phenix_apps/apps/cherrymountain
 ```
+
+`tests/test_sites.py` runs the app on each of the four sites. It builds the
+experiment of a site from the generated workflow, topology file, and scenario
+of the checkout, with no recorded copy.
 
 The tests run every stage on two recorded experiments,
 `tests/fixtures/experiment-ci.json` and `experiment-full.json`.

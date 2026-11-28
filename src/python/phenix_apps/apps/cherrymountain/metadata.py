@@ -14,7 +14,7 @@ strict mode, so ``"false"`` is not a bool and ``"502"`` is not a port.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal
 
 from pydantic import (
     AfterValidator,
@@ -25,6 +25,7 @@ from pydantic import (
     SecretStr,
     Tag,
     field_validator,
+    model_validator,
 )
 from pydantic.alias_generators import to_camel
 
@@ -39,8 +40,17 @@ AbsPath = Annotated[str, Field(pattern=r"^/(?:[\w.+@-]+/?)*$")]
 RelPath = Annotated[str, Field(pattern=r"^[\w+@-][\w.+@-]*(?:/[\w+@-][\w.+@-]*)*$")]
 #: A FUXA view name or URL path segment.
 ViewName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")]
+#: The code of one site of the fleet (plant/sites.yaml): two lowercase letters.
+SiteCode = Annotated[str, Field(pattern=r"^[a-z]{2}$")]
 #: A vendor technician's short name; the accounts are ``ridgeline-<name>``.
 Technician = Annotated[str, Field(pattern=r"^[a-z][a-z0-9]{1,15}$")]
+#: An account of the company's own staff: a role, as plant/sites.yaml of the
+#: topology repository names it (``corp-controls``).
+StaffAccount = Annotated[
+    str, Field(pattern=r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$", max_length=31)
+]
+#: The start of a technician's account. The Wazuh rules for the vendor match it.
+VENDOR_PREFIX: Final[str] = "ridgeline-"
 
 
 def _no_parent(value: str) -> str:
@@ -279,11 +289,27 @@ class Verify(Closed):
     recheck: Literal["unprovisioned", "all"] = "unprovisioned"
 
 
+def site_host(site: str | None, name: str) -> str:
+    """The name of a plant host at a site of the fleet: the site's code, a
+    hyphen, and the host's single-site name. This is plantgen's rule
+    (tools/plantgen/plantgen/sites.py, ``SiteSpec.host``). Without a site, the
+    name is the single site's."""
+    return name if site is None else f"{site}-{name}"
+
+
 class AppMetadata(Block):
     """The ``metadata`` block of the cherrymountain app."""
 
-    #: plant.yaml variant: ci, lite, or full.
+    #: plant.yaml variant: ci, lite, or full. For a site of the fleet, the
+    #: site's code: plantgen gives the site's plant one variant of that name.
     variant: Name
+    #: The code of the site of the fleet that this experiment is, as in
+    #: plant/sites.yaml (``fc``). The generated scenario of a site sets it
+    #: (plantgen's ``phenix/cherrymountain.yaml``). With it, the app reads the
+    #: site's files (``plant/generated/fleet/<site>/``), its default host names
+    #: have the site's prefix (``fc-sim-ctl``), and the site's own sim-ctl gets
+    #: a HELICS broker unit. Without it, the experiment is the single site.
+    site: SiteCode | None = None
     #: The cherrymountain-brewery directory inside the phenix container.
     source_dir: SafeAbsPath = "/phenix/topologies/cherrymountain-brewery"
     sim_ctl: SimCtl = Field(default_factory=SimCtl)
@@ -302,6 +328,15 @@ class AppMetadata(Block):
     vendor_technicians: Annotated[
         list[Technician], Field(min_length=1, max_length=8)
     ] = Field(default_factory=lambda: ["akim", "jdiaz"])
+    #: The company's own staff with a named account on the jump host of a site
+    #: that the vendor does not reach (docs/multisite/PLANS.md 4.6 in the
+    #: topology repository). The generated scenario of such a site sets it from
+    #: plant/sites.yaml (``staff``). Each account gets a Guacamole password, a
+    #: TOTP key, and an EWS password for this experiment, in the ``staff.env``
+    #: that the site's topology gives its jump host and its workstation.
+    staff_accounts: Annotated[list[StaffAccount], Field(max_length=8)] = Field(
+        default_factory=list
+    )
     verify: Verify = Field(default_factory=Verify)
     #: Export FUXA alarm history, DAQ data, and an InfluxDB backup at cleanup.
     export_on_cleanup: bool = True
@@ -312,6 +347,28 @@ class AppMetadata(Block):
         if len(set(value)) != len(value):
             raise ValueError("vendorTechnicians must not repeat a name")
         return value
+
+    @field_validator("staff_accounts")
+    @classmethod
+    def _staff_are_not_the_vendor(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("staffAccounts must not repeat an account")
+        vendor: list[str] = [name for name in value if name.startswith(VENDOR_PREFIX)]
+        if vendor:
+            raise ValueError(
+                f"staffAccounts {vendor} start with {VENDOR_PREFIX!r}, which is "
+                "the prefix of the vendor's technicians"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _site_is_the_variant(self) -> AppMetadata:
+        if self.site is not None and self.variant != self.site:
+            raise ValueError(
+                f"site is {self.site} and variant is {self.variant}: the plant "
+                "of a site has one variant, named by the site's code"
+            )
+        return self
 
 
 # ---------------------------------------------------------------- hosts
@@ -538,3 +595,42 @@ class AppHosts(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     hosts: list[AppHost] = Field(default_factory=list)
+
+
+def site_defaults(
+    app: AppMetadata, hosts: dict[str, HostBase]
+) -> tuple[AppMetadata, dict[str, HostBase]]:
+    """The metadata of a site of the fleet, with the site's name of a host
+    wherever a key that names a host was left to its default.
+
+    A default is a single-site name (``sim-ctl``, ``wazuh``, ``scada-fuxa``,
+    ``ews``). At a site the same host has the site's prefix
+    (:func:`site_host`). A name that the scenario gives is kept as it is.
+    Without ``site``, nothing changes."""
+    site: str | None = app.site
+    if site is None:
+        return app, hosts
+    update: dict[str, Any] = {}
+    if "hostname" not in app.sim_ctl.model_fields_set:
+        update["sim_ctl"] = app.sim_ctl.model_copy(
+            update={"hostname": site_host(site, app.sim_ctl.hostname)}
+        )
+    if app.wazuh is not None and "manager" not in app.wazuh.model_fields_set:
+        update["wazuh"] = app.wazuh.model_copy(
+            update={"manager": site_host(site, app.wazuh.manager)}
+        )
+    named: dict[str, HostBase] = {}
+    for hostname, md in hosts.items():
+        if isinstance(md, HmiHost) and "fuxa" not in md.model_fields_set:
+            md = md.model_copy(update={"fuxa": site_host(site, md.fuxa)})
+        elif isinstance(md, GuacamoleHost) and "connections" not in md.model_fields_set:
+            md = md.model_copy(
+                update={
+                    "connections": [
+                        c.model_copy(update={"hostname": site_host(site, c.hostname)})
+                        for c in md.connections
+                    ]
+                }
+            )
+        named[hostname] = md
+    return (app.model_copy(update=update) if update else app), named

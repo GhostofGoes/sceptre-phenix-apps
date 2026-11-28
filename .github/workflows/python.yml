@@ -51,10 +51,9 @@ jobs:
       - name: Check out the CherryMountain Brewery topology
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: GhostofGoes/sceptre-phenix-topologies
-          ref: fb43c7f4ee7f8813aeffd600544b5ed38aa1cb08 # feat-secret-topo
-          path: topologies
-          sparse-checkout: cherrymountain-brewery
+          repository: GhostofGoes/brew
+          ref: 3f6ab0bca492e81310a1e816c2d31b4fb702177e # feat-multisite
+          path: topologies/cherrymountain-brewery
           lfs: true
           persist-credentials: false
       # The cherrymountain app's test_template_lint.py runs shellcheck,

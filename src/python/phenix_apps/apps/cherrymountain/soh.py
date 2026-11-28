@@ -149,7 +149,7 @@ def _test(name: str, script: str, stdout: str) -> dict[str, str]:
 
 def _modbus_tests(ctx: Context, hostname: str, md: OpenPlcHost) -> list[dict[str, str]]:
     """A Modbus read from the PLC to each device its modbus_master polls."""
-    program: str = md.program or hostname
+    program: str = md.program or ctx.sources.program_name(hostname)
     path = ctx.sources.plc_conf_dir(program) / "modbus_master.json"
     if not path.is_file():
         return []

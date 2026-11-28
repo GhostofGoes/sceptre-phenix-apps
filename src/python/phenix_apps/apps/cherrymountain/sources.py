@@ -31,6 +31,13 @@ from typing import Any, ClassVar, Final
 
 from pydantic import BaseModel, ConfigDict
 
+#: The variant whose program ZIPs a site of the fleet uses. A site is this
+#: variant with parts left out (plantgen, ``fleet.BASE_VARIANT``), and a PLC
+#: program holds no address: the boot script replaces the plugin configs in
+#: the ZIP with the site's.
+SITE_PROGRAM_VARIANT: Final[str] = "full"
+#: The directory of the sites under plant/generated/ (plantgen, ``fleet.DIRECTORY``).
+FLEET_DIRECTORY: Final[str] = "fleet"
 #: The first bytes of a Git LFS pointer file.
 LFS_POINTER: Final[bytes] = b"version https://git-lfs"
 
@@ -100,13 +107,19 @@ class DebugMap(BaseModel):
 
 
 class Sources:
-    """Paths and loaders for one topology directory and variant."""
+    """Paths and loaders for one topology directory and variant, or for one
+    site of the fleet (``site``, a code of plant/sites.yaml)."""
 
-    def __init__(self, root: Path, variant: str) -> None:
+    def __init__(self, root: Path, variant: str, site: str | None = None) -> None:
         self.root: Path = root
         self.variant: str = variant
+        self.site: str | None = site
         self.plant_yaml: Path = root / "plant" / "plant.yaml"
-        self.generated: Path = root / "plant" / "generated" / variant
+        self.generated: Path = (
+            root / "plant" / "generated" / variant
+            if site is None
+            else root / "plant" / "generated" / FLEET_DIRECTORY / site
+        )
         self.injects: Path = root / "phenix-injects"
         self._plant: Any = None
         self._plantgen_render: ModuleType | None = None
@@ -154,13 +167,44 @@ class Sources:
                         "cannot import plantgen from tools/plantgen in the topology directory"
                     ) from ex
                 try:
-                    self._plant = model.load(self.plant_yaml, self.variant)
+                    self._plant = (
+                        model.load(self.plant_yaml, self.variant)
+                        if self.site is None
+                        else self._site_plant(model)
+                    )
                 except ValueError as ex:
                     # PlantError names the plant.yaml key that is wrong.
-                    raise SourceError(
-                        f"plant/plant.yaml, variant {self.variant}: {ex}"
-                    ) from ex
+                    what: str = (
+                        f"variant {self.variant}"
+                        if self.site is None
+                        else f"site {self.site} of plant/sites.yaml"
+                    )
+                    raise SourceError(f"plant/plant.yaml, {what}: {ex}") from ex
         return self._plant
+
+    def _site_plant(self, model: Any) -> Any:
+        """plant.yaml expanded for the site, the way plantgen expands it when it
+        writes the site's files (``fleet.expand_site``): the hosts have the
+        site's names and addresses. Call it with tools/plantgen on the path."""
+        sites_yaml: Path = self.require(self.root / "plant" / "sites.yaml")
+        wan_yaml: Path = self.require(self.root / "wan" / "wan.yaml")
+        try:
+            fleet: Any = importlib.import_module("plantgen.fleet")
+            sites: Any = importlib.import_module("plantgen.sites")
+        except ImportError as ex:
+            raise SourceError(
+                "the plantgen in tools/plantgen of the topology directory does "
+                "not know the sites of the fleet (plantgen.fleet, plantgen.sites)"
+            ) from ex
+        plant_file: Any = model.load_file(self.plant_yaml)
+        found: list[Any] = sites.load(sites_yaml, plant_file, wan_yaml)
+        spec: Any = next((s for s in found if s.code == self.site), None)
+        if spec is None:
+            raise SourceError(
+                f"plant/sites.yaml has no site {self.site}; it has "
+                f"{[s.code for s in found]}"
+            )
+        return fleet.expand_site(spec, plant_file, sites.load_wan(wan_yaml))
 
     def st_name(self, tag: str) -> str:
         """The ST variable name plantgen gives a tag (CEL.FV101.TT01.PV -> CEL_FV101_TT01_PV)."""
@@ -181,16 +225,27 @@ class Sources:
     def generated_file(self, *parts: str) -> Path:
         return self.require(self.generated.joinpath(*parts))
 
+    def program_name(self, hostname: str) -> str:
+        """The program of a PLC when its metadata names none: the host's name,
+        which at a site of the fleet is the name without the site's prefix
+        (``fc-plc-cellar`` runs ``plc-cellar``)."""
+        prefix: str = "" if self.site is None else f"{self.site}-"
+        return hostname.removeprefix(prefix)
+
     def plc_conf_dir(self, program: str) -> Path:
-        return self.generated / "openplc" / program
+        """Where plantgen wrote the plugin configs of a program. plantgen names
+        the directory after the PLC, so at a site it has the site's prefix."""
+        prefix: str = "" if self.site is None else f"{self.site}-"
+        return self.generated / "openplc" / f"{prefix}{program}"
 
     def program_zip(self, program: str) -> Path:
         """The program ZIP: ``phenix-injects/openplc/<program>.zip`` for ci
         (``plc/plc-cellar/build_zip.sh``), ``phenix-injects/openplc/<variant>/
-        <program>.zip`` for full and lite (``plc/common/build_zip.sh``)."""
-        sub: Path = (
-            Path("openplc") if self.variant == "ci" else Path("openplc") / self.variant
-        )
+        <program>.zip`` for full and lite (``plc/common/build_zip.sh``). A site
+        of the fleet has no ZIPs of its own: it runs those of the full variant
+        (``SITE_PROGRAM_VARIANT``)."""
+        variant: str = self.variant if self.site is None else SITE_PROGRAM_VARIANT
+        sub: Path = Path("openplc") if variant == "ci" else Path("openplc") / variant
         path: Path = self.require(self.injects / sub / f"{program}.zip")
         with path.open("rb") as fh:
             if fh.read(len(LFS_POINTER)) == LFS_POINTER:
