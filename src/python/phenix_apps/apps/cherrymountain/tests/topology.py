@@ -1,12 +1,12 @@
 """Where the tests find the CherryMountain Brewery topology directory.
 
 The app reads plant.yaml, the plantgen output, the program ZIPs, and the
-injects from the ``cherrymountain-brewery`` directory of
-sceptre-phenix-topologies (``sourceDir`` in a range), which is not part of this
-repository. The tests run the app on a checkout of it:
+injects from a checkout of the brew repository (GhostofGoes/brew, ``sourceDir``
+in a range), which is not part of this repository. The tests run the app on a
+checkout of it:
 
 * ``CHERRYMOUNTAIN_TOPOLOGY_DIR`` names the directory, or
-* a ``sceptre-phenix-topologies`` checkout next to this repository is used.
+* a ``brew`` checkout next to this repository is used.
 
 Without either, the tests that need the directory are skipped.
 """
@@ -20,9 +20,9 @@ from typing import Final
 ENV: Final[str] = "CHERRYMOUNTAIN_TOPOLOGY_DIR"
 #: What a skipped test reports.
 MISSING: Final[str] = (
-    f"needs the CherryMountain Brewery topology: set {ENV} to the "
-    "cherrymountain-brewery directory of a sceptre-phenix-topologies checkout "
-    "(with its Git LFS files), or put that checkout next to this repository"
+    f"needs the CherryMountain Brewery topology: set {ENV} to a checkout of "
+    "the brew repository (with its Git LFS files), or put a checkout named "
+    "brew next to this repository"
 )
 #: How far above this file the directory that holds this repository's checkout
 #: is: tests, cherrymountain, apps, phenix_apps, python, src, the repository.
@@ -43,7 +43,7 @@ def find() -> Path | None:
         path: Path = Path(named).resolve()
         if not _is_topology(path):
             raise FileNotFoundError(
-                f"{ENV}={named} is not a cherrymountain-brewery directory: "
+                f"{ENV}={named} is not a checkout of the brew repository: "
                 "it has no plant/plant.yaml"
             )
         return path
@@ -51,9 +51,5 @@ def find() -> Path | None:
     parents = Path(__file__).resolve().parents
     if len(parents) <= _LEVELS_TO_REPOSITORY_PARENT:
         return None
-    sibling: Path = (
-        parents[_LEVELS_TO_REPOSITORY_PARENT]
-        / "sceptre-phenix-topologies"
-        / "cherrymountain-brewery"
-    )
+    sibling: Path = parents[_LEVELS_TO_REPOSITORY_PARENT] / "brew"
     return sibling if _is_topology(sibling) else None

@@ -2,16 +2,16 @@
 
 cherrymountain is a phenix user app that provisions the CherryMountain Brewery
 topology
-([DESIGN.md 16](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#16-new-and-extended-software)).
+([DESIGN.md 16](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#16-new-and-extended-software)).
 To provision a topology is to prepare its VMs for use. The app makes sure that
 the scenario agrees with `plant/plant.yaml`. It renders every per-host file
 that the VMs need at boot. It monitors provisioning, and it exports the data of
 the run at the end.
 
-The topology is the `cherrymountain-brewery` directory of
-[sceptre-phenix-topologies](https://github.com/GhostofGoes/sceptre-phenix-topologies/tree/feat-secret-topo/cherrymountain-brewery)
-(branch `feat-secret-topo` of the fork). "DESIGN.md" below is the
-`docs/DESIGN.md` file of that directory. The app does nothing without that
+The topology is the [brew](https://github.com/GhostofGoes/brew) repository. A
+range has a clone of it at `/phenix/topologies/cherrymountain-brewery`, and
+"the topology directory" below is that clone. "DESIGN.md" below is the
+`docs/DESIGN.md` file of that repository. The app does nothing without that
 directory ([Inputs it reads](#inputs-it-reads)).
 
 ```
@@ -25,7 +25,7 @@ stages: configure, pre-start, post-start, running, cleanup
 Put the app after `ot-sim` and before `helics`. ot-sim annotates the field
 devices with `helics/federate`. This app annotates the sim-* federate nodes.
 helics counts both
-([DESIGN.md 15.2](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#152-apps)).
+([DESIGN.md 15.2](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#152-apps)).
 A federate is one program of the HELICS co-simulation.
 
 In the full scenario, the `mirror` app comes before this app. In each stage,
@@ -137,7 +137,7 @@ the node or not. The files are `/etc/cherrymountain/nftables-mgmt.nft`,
 The policy only matches the MGMT interface. It allows ICMP echo, HELICS,
 OpenSearch, and NTP to sim-ctl. It also allows HELICS from the broker to the
 federate cores. It drops everything else on MGMT
-([DESIGN.md 10.1](https://github.com/GhostofGoes/sceptre-phenix-topologies/blob/feat-secret-topo/cherrymountain-brewery/docs/DESIGN.md#101-zones-and-conduits-purdue-model--isaiec-62443)).
+([DESIGN.md 10.1](https://github.com/GhostofGoes/brew/blob/main/docs/DESIGN.md#101-zones-and-conduits-purdue-model--isaiec-62443)).
 
 phenix does not rename the NICs of a guest. Thus the hook runs after
 `3_interfaces-start.sh`. It finds the device that holds the MGMT address and
@@ -648,7 +648,7 @@ them:
 
 The tests run the app on a checkout of the topology directory, with its Git LFS
 files (`git lfs pull`). They find the checkout in `CHERRYMOUNTAIN_TOPOLOGY_DIR`,
-or in a `sceptre-phenix-topologies` checkout next to this repository
+or in a `brew` checkout next to this repository
 (`tests/topology.py`). Without a checkout, pytest skips the tests, and one
 skipped test gives the reason. The checks of the topology itself run the tests
 the same way from an installed package
